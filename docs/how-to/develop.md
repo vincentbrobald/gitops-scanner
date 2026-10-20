@@ -33,7 +33,9 @@ and `:latest` to the site's registry. The gitops repository's pipeline runs
 `:latest`, pulled each time: a merge here applies to the next check there.
 The same image is published as `docker.io/vincentbrobald/gitops-scanner`,
 tags `<commit>` (7 characters) and `latest`, with `image/OVERVIEW.md` as its
-overview there.
+overview there. To build and host it yourself instead: the gitops
+repository's how-to [Build and host the images
+yourself](https://github.com/vincentbrobald/gitops/blob/main/docs/how-to/build-and-host-the-images.md).
 
 The image carries the licenses of what it contains under `/licenses`: this
 repository's, kubeconform's and sops' with their dependencies' (go-licenses,
