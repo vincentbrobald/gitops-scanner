@@ -1,0 +1,125 @@
+# CI of gitops-scanner, run by Pipelines-as-Code on cluster lab (namespace
+# gitops-scanner): lint and test the code, build the image (kaniko), scan it
+# (Trivy), and on main push it as gitops-scanner/gitops-check:<commit> and
+# :latest. Pull requests stop after the scan.
+#
+# {{ ... }}: filled in by PaC from the webhook event; $(...): by Tekton.
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  name: build
+  annotations:
+    pipelinesascode.tekton.dev/on-event: "[pull_request, push]"
+    pipelinesascode.tekton.dev/on-target-branch: "[main]"
+    pipelinesascode.tekton.dev/max-keep-runs: "5"
+spec:
+  pipelineSpec:
+    workspaces:
+      - name: source
+      - name: git-auth
+      - name: ca
+      - name: registry
+    tasks:
+      # One task: its steps share the emptyDir workspace in one pod.
+      - name: build
+        workspaces:
+          - {name: source, workspace: source}
+          - {name: git-auth, workspace: git-auth}
+          - {name: ca, workspace: ca}
+          - {name: registry, workspace: registry}
+        taskSpec:
+          workspaces:
+            - name: source
+            - name: git-auth
+            - name: ca
+            - name: registry
+          stepTemplate:
+            workingDir: $(workspaces.source.path)
+            env:
+              - {name: HOME, value: /tekton/home}
+          steps:
+            - name: clone
+              image: docker.io/alpine/git:2.52.0
+              script: |
+                #!/bin/sh
+                set -eu
+                cp $(workspaces.git-auth.path)/.git-credentials $(workspaces.git-auth.path)/.gitconfig "$HOME/"
+                git config --global http.sslCAInfo $(workspaces.ca.path)/site-root-ca.crt
+                git config --global --add safe.directory '*'
+                git init -q .
+                git remote add origin "{{ repo_url }}"
+                git fetch -q --depth 1 origin "{{ revision }}"
+                git checkout -q FETCH_HEAD
+                git log -1 --format='%h %s'
+            # Lint and tests, before anything is built. The tests include whole
+            # runs of gitops-check against real git repositories and fake Argo CD
+            # and Forgejo servers, so git is installed; coverage below
+            # pyproject.toml's fail_under fails the run.
+            - name: test
+              image: docker.io/library/python:3.14-slim
+              script: |
+                #!/bin/sh
+                set -eu
+                apt-get update -qq && apt-get install -y -qq --no-install-recommends git > /dev/null
+                pip install -q --disable-pip-version-check --root-user-action=ignore -r requirements-test.txt
+                ruff check .
+                python -m pytest -q -p no:cacheprovider --cov --cov-report=term
+            - name: image
+              image: ghcr.io/osscontainertools/kaniko:v1.28.6-debug
+              script: |
+                #!/busybox/sh
+                set -eu
+                registry=$(cat "$(workspaces.registry.path)/registry")
+                mkdir -p .build
+                /kaniko/executor --context="dir://$(workspaces.source.path)" --dockerfile=Containerfile \
+                  --build-arg "BASE=$registry/docker.io/library/python:3.14.7-alpine3.24" \
+                  --build-arg "GO_BASE=$registry/docker.io/library/golang:1.26.9-trixie" \
+                  --registry-certificate "$registry=$(workspaces.ca.path)/site-root-ca.crt" \
+                  --label "org.opencontainers.image.revision={{ revision }}" \
+                  --label "org.opencontainers.image.source={{ repo_url }}" \
+                  --destination "$registry/gitops-scanner/gitops-check:{{ revision }}" \
+                  --no-push --tar-path .build/image.tar
+            # Fails on HIGH or CRITICAL vulnerabilities that have a fix. Its
+            # database comes through the registry's mirror of ghcr.io.
+            - name: scan
+              image: ghcr.io/aquasecurity/trivy:0.75.0
+              env:
+                - {name: TRIVY_CACHE_DIR, value: /tekton/home/trivy}
+                - {name: SSL_CERT_DIR, value: "$(workspaces.ca.path):/etc/ssl/certs"}
+              script: |
+                #!/bin/sh
+                set -eu
+                registry=$(cat "$(workspaces.registry.path)/registry")
+                trivy image --input .build/image.tar --no-progress \
+                  --db-repository "$registry/ghcr.io/aquasecurity/trivy-db" \
+                  --java-db-repository "$registry/ghcr.io/aquasecurity/trivy-java-db" \
+                  --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
+            - name: push
+              image: quay.io/skopeo/stable:v1.22.3
+              script: |
+                #!/bin/sh
+                set -eu
+                if [ "{{ event_type }}" != push ]; then
+                  echo "pull request: image built and scanned, not pushed"
+                  exit 0
+                fi
+                creds=$(workspaces.registry.path)
+                registry=$(cat "$creds/registry")
+                for tag in "{{ revision }}" latest; do
+                  skopeo copy --quiet --dest-cert-dir "$(workspaces.ca.path)" \
+                    --dest-creds "$(cat "$creds/username"):$(cat "$creds/password")" \
+                    docker-archive:.build/image.tar "docker://$registry/gitops-scanner/gitops-check:$tag"
+                  echo "pushed $registry/gitops-scanner/gitops-check:$tag"
+                done
+  workspaces:
+    - name: source
+      emptyDir: {}
+    - name: git-auth
+      secret:
+        secretName: "{{ git_auth_secret }}"
+    - name: ca
+      configMap:
+        name: site-root-ca
+    - name: registry
+      secret:
+        secretName: registry-push

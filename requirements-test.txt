@@ -1,0 +1,6 @@
+# Test tools of the CI (.tekton/build.yaml), pinned: a new release must not
+# change a result without a change here.
+pytest==9.1.1
+pytest-cov==7.1.0
+ruff==0.16.10
+PyYAML==6.0.3

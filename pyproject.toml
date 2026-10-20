@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gitops-check"
+version = "0.1.0"
+description = "Merge-request checks of a gitops repository, with a render-only Argo CD"
+requires-python = ">=3.12"
+dependencies = ["PyYAML>=6"]
+
+[project.scripts]
+gitops-check = "gitops_check.__main__:main"
+
+[tool.setuptools]
+packages = ["gitops_check"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["gitops_check"]
+branch = false
+
+[tool.coverage.report]
+# The CI fails below this (python -m pytest --cov --cov-fail-under from here).
+fail_under = 85
+show_missing = true
