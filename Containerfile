@@ -17,7 +17,7 @@ ARG GO_BASE=docker.io/library/golang:1.26.9-trixie
 # KUBECONFORM_DEPS.
 FROM ${GO_BASE} AS kubeconform
 ARG KUBECONFORM_VERSION=v0.8.0
-ARG KUBECONFORM_DEPS="golang.org/x/text@v0.39.0"
+ARG KUBECONFORM_DEPS="golang.org/x/text@v0.41.0"
 ENV GOTOOLCHAIN=local CGO_ENABLED=0
 WORKDIR /src
 RUN go mod download github.com/yannh/kubeconform@${KUBECONFORM_VERSION} \
