@@ -29,5 +29,16 @@ the image's entry point and tools: a smoke test), scans it with Trivy (fails on
 fixable HIGH/CRITICAL; the image is Python on Alpine plus git, kubeconform, sops and ssh-keygen (the last two for the gitops repository's generators),
 where Debian's slim base carried unfixed ones),
 and on `main` pushes `gitops-scanner/gitops-check:<commit>`
-and `:latest`. The gitops repository's pipeline runs `:latest`, pulled each
-time: a merge here applies to the next check there.
+and `:latest` to the site's registry. The gitops repository's pipeline runs
+`:latest`, pulled each time: a merge here applies to the next check there.
+The same image is published as `docker.io/vincentbrobald/gitops-scanner`,
+tags `<commit>` (7 characters) and `latest`, with `image/OVERVIEW.md` as its
+overview there.
+
+The image carries the licenses of what it contains under `/licenses`: this
+repository's, kubeconform's and sops' with their dependencies' (go-licenses,
+in their build stages; the source of MPL-2.0 modules too), the Python
+packages' license files (`image/python-licenses.py`) and the list of the
+Alpine packages with their licenses (`apk list --installed`). Its labels
+`org.opencontainers.image.source` and `.licenses` name the public repository
+and MIT.

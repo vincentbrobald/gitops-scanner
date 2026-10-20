@@ -1,6 +1,8 @@
 # Image of gitops-check, the merge-request checks of a gitops repository,
 # built by .tekton/build.yaml (kaniko) and pushed to the site's registry as
-# gitops-scanner/gitops-check:<commit> and :latest.
+# gitops-scanner/gitops-check:<commit> and :latest; published as
+# docker.io/vincentbrobald/gitops-scanner. It carries the licenses of what it
+# contains under /licenses.
 #   podman build -t gitops-check . && podman run --rm gitops-check --help
 # BASE, GO_BASE: the CI passes the same images through the registry's
 # pull-through mirror.
@@ -9,6 +11,7 @@
 # packages and fixes them quickly.
 ARG BASE=docker.io/library/python:3.14.7-alpine3.24
 ARG GO_BASE=docker.io/library/golang:1.26.9-trixie
+ARG GO_LICENSES=github.com/google/go-licenses/v2@v2.0.1
 
 # kubeconform validates the rendered resources. Built from its release's
 # module (checksum-verified by Go's sum database) with a current Go: the
@@ -27,6 +30,10 @@ RUN go mod download github.com/yannh/kubeconform@${KUBECONFORM_VERSION} \
     && go build -trimpath -ldflags "-s -w -X main.version=${KUBECONFORM_VERSION}" \
          -o /kubeconform ./cmd/kubeconform \
     && /kubeconform -v
+# Its license and its dependencies' (go-licenses: the texts, and the source of
+# MPL-2.0 modules).
+ARG GO_LICENSES
+RUN go run ${GO_LICENSES} save ./cmd/kubeconform --save_path=/licenses/kubeconform
 
 # sops (v3.13.3, 2026-07-23): the gitops repository's merge check encrypts
 # the Secrets its generators make (tools/teams.py, tools/ci.py), with the
@@ -43,10 +50,17 @@ RUN go mod download github.com/getsops/sops/v3@${SOPS_VERSION} \
     && go get ${SOPS_DEPS} && go mod tidy \
     && go build -trimpath -ldflags "-s -w" -o /sops ./cmd/sops \
     && /sops --version --disable-version-check
+ARG GO_LICENSES
+RUN go run ${GO_LICENSES} save ./cmd/sops --save_path=/licenses/sops
 
 FROM ${BASE}
+LABEL org.opencontainers.image.source=https://github.com/vincentbrobald/gitops-scanner \
+      org.opencontainers.image.licenses=MIT
 COPY --from=kubeconform /kubeconform /usr/local/bin/kubeconform
 COPY --from=sops /sops /usr/local/bin/sops
+COPY --from=kubeconform /licenses/kubeconform /licenses/kubeconform
+COPY --from=sops /licenses/sops /licenses/sops
+COPY LICENSE /licenses/gitops-scanner/LICENSE
 
 # git: the checks render both revisions from worktrees of one clone.
 # openssh-keygen: the generators make the teams' deploy keys.
@@ -55,10 +69,16 @@ RUN apk add --no-cache git openssh-keygen
 WORKDIR /app
 COPY pyproject.toml ./
 COPY gitops_check ./gitops_check
-# Install the package, then drop what only installing needs: /app (sources,
-# build files), pip itself and the wheels ensurepip bundles. The image then carries no
-# packaging tools (nor their vendored libraries' vulnerabilities).
+COPY image/python-licenses.py /tmp/python-licenses.py
+# Install the package and list the licenses of what it brought (the Python
+# packages' license files; the Alpine packages with their licenses, whose
+# sources are Alpine's aports). Then drop what only installing needs: /app
+# (sources, build files), pip itself and the wheels ensurepip bundles. The
+# image then carries no packaging tools (nor their vendored libraries'
+# vulnerabilities).
 RUN pip install --no-cache-dir --disable-pip-version-check --root-user-action=ignore . \
+    && python /tmp/python-licenses.py /licenses/python && rm /tmp/python-licenses.py \
+    && apk list --installed > /licenses/alpine-packages.txt \
     && cd / && rm -rf /app \
     && python -m pip uninstall -y --root-user-action=ignore pip \
     && rm -rf /usr/local/lib/python3*/ensurepip/_bundled

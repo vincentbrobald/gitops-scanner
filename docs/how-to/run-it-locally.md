@@ -16,4 +16,4 @@ python -m gitops_check --repo ../gitops --base origin/main --head origin/my-bran
 ```
 
 Or with the image: `podman run --rm --network host -e ARGOCD_TOKEN -v ../gitops:/repo:Z
-registry.example.org/gitops-scanner/gitops-check:latest --repo /repo --base ... --head ...`.
+docker.io/vincentbrobald/gitops-scanner:latest --repo /repo --base ... --head ...`.
