@@ -1,7 +1,3 @@
-"""End-to-end tests without a cluster: real git repositories, and fake Argo CD
-and Forgejo HTTP servers. The fake Argo CD renders an Application like a
-directory source: every YAML document under its path, at its revision, read
-from the repository with git (so revision pinning is exercised for real)."""
 from __future__ import annotations
 
 import json
@@ -42,8 +38,6 @@ def app_yaml(name: str, path: str) -> str:
 CONFIGMAP = "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: settings}\ndata: {mode: one}\n"
 
 
-# -- fixtures: a git repository, a fake Argo CD -----------------------------------
-
 def git(repo: Path, *args: str) -> str:
     return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
 
@@ -72,12 +66,11 @@ def commit(repo: Path, files: dict[str, str | None], msg: str = "change") -> str
 
 
 class FakeArgo(BaseHTTPRequestHandler):
-    """The few endpoints gitops-check calls, backed by the git repository."""
     repo: Path
     apps: dict
     calls: list
 
-    def log_message(self, *a):   # quiet
+    def log_message(self, *a):
         pass
 
     def _send(self, code: int, body: dict | None = None):
@@ -158,8 +151,6 @@ def run_main(repo: Path, url: str, base: str, head: str, tmp_path: Path, monkeyp
     return code, report.read_text() if report.exists() else ""
 
 
-# -- the whole check -------------------------------------------------------------
-
 def test_main_passes_and_cleans_up(repo, argo, tmp_path, monkeypatch):
     handler, url = argo
     base = commit(repo, {".gitops-check.yaml": CONFIG, "apps/web.yaml": app_yaml("web", "web"), "web/cm.yaml": CONFIGMAP})
@@ -168,11 +159,10 @@ def test_main_passes_and_cleans_up(repo, argo, tmp_path, monkeypatch):
     code, report = run_main(repo, url, base, head, tmp_path, monkeypatch)
     assert code == 0, report
     assert "gitops-check passed" in report
-    assert "| `api` | added | 1 |" in report                     # the new Application and its ConfigMap
-    assert "`web`" not in report.split("### Changes")[1]          # unchanged: not in the diff
-    assert handler.apps == {}                                     # every preview Application deleted
-    assert git(repo, "worktree", "list").count("\n") == 0         # worktrees removed
-    # sources were pinned: before rendered at base, after at head
+    assert "| `api` | added | 1 |" in report
+    assert "`web`" not in report.split("### Changes")[1]
+    assert handler.apps == {}
+    assert git(repo, "worktree", "list").count("\n") == 0
     assert {a for a in (p for m, p in handler.calls if m == "DELETE")} >= {
         "/api/v1/applications/t-b-web", "/api/v1/applications/t-a-api"}
 
@@ -187,8 +177,8 @@ def test_main_logs_the_whole_report(repo, argo, tmp_path, monkeypatch, capsys):
     code, report = run_main(repo, url, base, head, tmp_path, monkeypatch)
     out = capsys.readouterr().out
     assert code == 0
-    assert "left out" not in out and out.count("<details>") == 2      # the log: every diff
-    assert report == out.rstrip("\n") or report in out                # --report: the same text
+    assert "left out" not in out and out.count("<details>") == 2
+    assert report == out.rstrip("\n") or report in out
 
 
 def test_main_reports_changes_and_errors(repo, argo, tmp_path, monkeypatch):
@@ -199,9 +189,9 @@ def test_main_reports_changes_and_errors(repo, argo, tmp_path, monkeypatch):
                          "apps/broken.yaml": app_yaml("broken", "nowhere")})
     code, report = run_main(repo, url, base, head, tmp_path, monkeypatch)
     assert code == 1
-    assert "broken: InvalidSpecError" in report                   # Argo CD's own error, per Application
+    assert "broken: InvalidSpecError" in report
     assert "web/secret.yaml: Secret s has values in clear" in report
-    assert "-  mode: one\n+  mode: two" in report                 # the per-resource diff
+    assert "-  mode: one\n+  mode: two" in report
 
 
 def test_main_refuses_an_outdated_pull_request(repo, argo, tmp_path, monkeypatch):
@@ -228,8 +218,6 @@ def test_main_without_config_or_token(repo, argo, tmp_path, monkeypatch, capsys)
         cli.main(["--repo", str(repo), "--base", rev, "--head", rev, "--server", url])
 
 
-# -- the Argo CD client ------------------------------------------------------------
-
 def test_argocd_client(repo, argo):
     handler, url = argo
     commit(repo, {"web/cm.yaml": CONFIGMAP})
@@ -250,8 +238,6 @@ def test_argocd_client(repo, argo):
     with pytest.raises(ArgoError, match="Connection refused|refused"):
         ArgoCD("http://127.0.0.1:9", "tok", timeout=2).list_apps("x")
 
-
-# -- the Forgejo comment -------------------------------------------------------------
 
 def test_forgejo_upsert_comment():
     comments: list[dict] = []
@@ -293,8 +279,6 @@ def test_forgejo_upsert_comment():
         srv.shutdown()
 
 
-# -- schemas: kubeconform's results mapped back to Applications ------------------------
-
 def test_schemas_maps_results_to_applications(tmp_path, monkeypatch):
     out = tmp_path / "kubeconform-output.json"
     fake = tmp_path / "kubeconform"
@@ -322,7 +306,7 @@ def test_schemas_maps_results_to_applications(tmp_path, monkeypatch):
 def test_cluster_scoped_kinds(monkeypatch):
     monkeypatch.setattr(kinds, "SA", Path("/nonexistent"))
     monkeypatch.setattr(kinds, "_cache", None)
-    assert kinds.discover() is None                        # not in a pod: the built-in list
+    assert kinds.discover() is None
     assert kinds.is_cluster_scoped({"apiVersion": "v1", "kind": "Namespace"})
     assert kinds.is_cluster_scoped({"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRole"})
     assert not kinds.is_cluster_scoped({"apiVersion": "apps/v1", "kind": "Deployment"})

@@ -1,21 +1,5 @@
-"""Checks on the "after" rendering (and the pull request's tree).
-
-Each check returns (errors, warnings), lists of human-readable strings:
-errors block the merge, warnings are for the reviewer. __main__ runs them all
-and concatenates the results.
-
-    render_errors      an Application or ApplicationSet Argo CD can't render   error
-    duplicates         a resource rendered by two Applications                  error
-    plaintext_secrets  a Secret with values in clear in Git, a secretGenerator  error
-    schemas            a resource invalid against its schema (kubeconform)      error
-                       resources without a known schema                         warning
-    unreached          a directory with manifests no entry point reaches        error
-    generated_edits    a file of deploy-talos.py changed by hand                warning
-    projects           an Application's source, destination or resource that    error
-                       its AppProject (rendered too) doesn't permit
-
-To add a check: a function returning (errors, warnings), called in
-__main__.main, with a unit test in tests/test_gitops_check.py.
+"""Each check returns (errors, warnings), lists of human-readable strings:
+errors block the merge, warnings are for the reviewer.
 """
 from __future__ import annotations
 
@@ -57,15 +41,11 @@ def dest_ns(a: App) -> str:
 
 
 def render_errors(r: Rendering) -> tuple[list[str], list[str]]:
-    """Argo CD's own errors, as recorded while rendering: per Application
-    (bad path, chart version, kustomize error, unknown revision), and for
-    ApplicationSets that don't generate; the rendering's warnings too."""
     errors = [f"{a.name}: {a.error}" for a in r.apps.values() if a.error]
     return errors + r.errors, list(r.warnings)
 
 
 def duplicates(r: Rendering) -> tuple[list[str], list[str]]:
-    """The same resource from two Applications: they would fight over it."""
     owner: dict[str, str] = {}
     errors = []
     for a in r.apps.values():
@@ -78,9 +58,6 @@ def duplicates(r: Rendering) -> tuple[list[str], list[str]]:
 
 
 def _is_credential(doc: dict) -> bool:
-    """Whether a Secret manifest holds credentials. Every Secret does, except
-    Argo CD repository and cluster Secrets without credential keys (a repo URL
-    and type, a cluster's labels): those are settings, fine in clear."""
     labels = (doc.get("metadata") or {}).get("labels") or {}
     if labels.get("argocd.argoproj.io/secret-type") not in ARGOCD_SECRET_TYPES:
         return True
@@ -89,10 +66,6 @@ def _is_credential(doc: dict) -> bool:
 
 
 def plaintext_secrets(tree: Path, cfg: Config) -> tuple[list[str], list[str]]:
-    """Secret values in clear in Git: Secret manifests that sops didn't
-    encrypt, and kustomize secretGenerators (their literals and files are in
-    the repository). Argo CD repository and cluster Secrets without
-    credentials are settings, not secrets."""
     ignored = [(tree / i).resolve() for i in cfg.ignore]
     errors = []
     for f in sorted(tree.rglob("*.y*ml")):
@@ -101,7 +74,7 @@ def plaintext_secrets(tree: Path, cfg: Config) -> tuple[list[str], list[str]]:
         try:
             docs = [d for d in yaml.safe_load_all(f.read_text(errors="replace")) if isinstance(d, dict)]
         except yaml.YAMLError:
-            continue      # not ours to judge: rendering reports broken manifests
+            continue
         rel = f.relative_to(tree)
         for d in docs:
             if d.get("kind") == "Secret" and (d.get("data") or d.get("stringData")) and "sops" not in d \
@@ -115,8 +88,6 @@ def plaintext_secrets(tree: Path, cfg: Config) -> tuple[list[str], list[str]]:
 
 
 def schemas(r: Rendering, kubeconform: str = "kubeconform") -> tuple[list[str], list[str]]:
-    """kubeconform on every rendered resource: Kubernetes' schemas, and the CRD
-    catalog's; resources without a known schema are a warning."""
     if not shutil.which(kubeconform):
         return [], [f"{kubeconform} not found: schemas not checked"]
     docs, owners = [], []
@@ -159,7 +130,6 @@ def schemas(r: Rendering, kubeconform: str = "kubeconform") -> tuple[list[str], 
 
 
 def _kustomize_refs(d: Path, root: Path, seen: set[Path]) -> None:
-    """Directories a kustomization reads, recursively (local paths only)."""
     if d in seen or not d.is_dir():
         return
     seen.add(d)
@@ -194,15 +164,6 @@ def _kustomize_refs(d: Path, root: Path, seen: set[Path]) -> None:
 
 
 def unreached(r: Rendering, cfg: Config, tree: Path, git_globs: list[str]) -> tuple[list[str], list[str]]:
-    """Directories with manifests that no entry point reaches: a typo in an
-    Application's path, an overlay nobody uses. A directory counts as reached
-    when it is (or is read by) an entry point or a source path of a rendered
-    Application, following kustomization references (_kustomize_refs); when
-    a git generator reads it; or when it is below a source rendered with
-    directory.recurse, or below a source that is a Helm chart (its
-    templates/, charts/, crds/: Helm reads them all), or a component that
-    an Application adds (spec.source.kustomize.components). The repository root,
-    dotfiles and the 'ignore' list are exempt."""
     reached: set[Path] = set()
     recursive: set[Path] = set()
     for e in cfg.entrypoints:
@@ -222,7 +183,7 @@ def unreached(r: Rendering, cfg: Config, tree: Path, git_globs: list[str]) -> tu
                     cp = (p / c).resolve()
                     _kustomize_refs(cp, tree, reached)
                     reached.add(cp)
-    for g in git_globs:   # what git generators read
+    for g in git_globs:
         for m in tree.glob(g):
             reached.add((m if m.is_dir() else m.parent).resolve())
     ignored = [(tree / i).resolve() for i in cfg.ignore]
@@ -237,11 +198,6 @@ def unreached(r: Rendering, cfg: Config, tree: Path, git_globs: list[str]) -> tu
 
 
 def git_generator_globs(r: Rendering, cfg: Config, appsets: list[dict]) -> list[str]:
-    """The paths (globs) the git generators on this repository read, nested
-    matrix and merge generators included: input of unreached(). A template
-    expression in a path (a matrix child using its sibling's parameters,
-    e.g. applications/{{ .org.path.basename }}/*/team.yaml) stands for any
-    single path segment, as a '*'."""
     globs = []
 
     def walk(gens):
@@ -260,7 +216,6 @@ def git_generator_globs(r: Rendering, cfg: Config, appsets: list[dict]) -> list[
 
 
 def generated_edits(tree: Path, changed_files: list[str]) -> tuple[list[str], list[str]]:
-    """Files written by deploy-talos.py, changed by hand: the next run overwrites them."""
     warnings = []
     for f in changed_files:
         p = tree / f
@@ -279,8 +234,6 @@ def _globs(value: str, patterns: list[str]) -> bool:
 
 
 def _dest_ok(server: str, name: str, ns: str, dests: list[dict]) -> bool:
-    """Whether a destination (server or cluster name, namespace) is in the
-    project's destinations; a negated namespace denies."""
     def cluster(d: dict) -> bool:
         return (bool(d.get("server")) and fnmatch.fnmatchcase(server, d["server"])) or \
                (bool(d.get("name")) and fnmatch.fnmatchcase(name, d["name"]))
@@ -294,14 +247,6 @@ def _kind_ok(group: str, kind: str, lst: list[dict]) -> bool:
 
 
 def projects(r: Rendering, cfg: Config) -> tuple[list[str], list[str]]:
-    """What Argo CD would refuse at sync: the preview renders every
-    Application in project 'default', so the AppProjects are checked here,
-    against the AppProjects the rendering itself contains (those of the
-    Argo CD the walk starts in, namespace argocd). Applications of other
-    instances (keyed namespace/name) and of entry points that aren't
-    deployed (samples) are not checked; nothing is when no AppProject is
-    rendered. A 'default' project not in Git is
-    Argo CD's own, which permits everything."""
     projs = {}
     for a in r.apps.values():
         for res in a.resources:
@@ -314,9 +259,10 @@ def projects(r: Rendering, cfg: Config) -> tuple[list[str], list[str]]:
     errors = []
     undeployed = {e.name for e in cfg.entrypoints if not e.deployed}
     for a in r.apps.values():
-        if "/" in a.name or a.parent is None or a.entrypoint in undeployed:   # another instance's; a stand-in
+        if "/" in a.name or a.parent is None or a.entrypoint in undeployed:
             continue
         if a.project not in projs:
+            # A 'default' project not in Git is Argo CD's own, which permits everything.
             if a.project != "default":
                 errors.append(f"{a.name}: project {a.project} doesn't exist")
             continue

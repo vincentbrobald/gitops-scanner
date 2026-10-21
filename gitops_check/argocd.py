@@ -1,6 +1,4 @@
-"""Client of the render-only Argo CD (argocd-preview), over its REST API.
-
-The same API the argocd CLI calls, without the CLI: on an Argo CD without an
+"""The same API the argocd CLI calls, without the CLI: on an Argo CD without an
 application controller, `argocd app manifests` asks for a refresh and waits
 for a reconciliation that never comes. GET .../manifests asks the repo-server
 directly.
@@ -11,10 +9,6 @@ Endpoints used, and the permission each needs (the preview's account 'ci'):
     GET    /api/v1/applications?selector=...      applications, get
     DELETE /api/v1/applications/<n>?cascade=false applications, delete
     POST   /api/v1/applicationsets/generate       applicationsets, create (nothing is stored)
-
-Argo CD masks Secret values ("++++++++") in what it returns: the ksops
-stand-in of the preview also writes a fingerprint per key in the annotation
-preview.argocd/fingerprints, which is not masked (see diff.py).
 """
 from __future__ import annotations
 
@@ -43,8 +37,6 @@ class ArgoCD:
         self.timeout = timeout
 
     def _call(self, method: str, path: str, body: dict | None = None, **params) -> dict:
-        """One API call; its JSON answer ({} when empty). Booleans in params
-        are sent as true/false, as the API expects."""
         url = f"{self.base}/api/v1/{path}"
         if params:
             url += "?" + urllib.parse.urlencode({k: str(v).lower() if isinstance(v, bool) else v
@@ -82,7 +74,6 @@ class ArgoCD:
         self._call("DELETE", f"applications/{urllib.parse.quote(name)}", cascade=False, appNamespace=self.namespace)
 
     def list_apps(self, selector: str) -> list[dict]:
-        """The Applications matching a label selector (e.g. a label key)."""
         return self._call("GET", "applications", selector=selector, appNamespace=self.namespace).get("items") or []
 
     def generate(self, appset: dict) -> list[dict]:

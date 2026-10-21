@@ -5,9 +5,6 @@ From the cluster's discovery API when running in a pod (any service account
 may read it, and it knows every CRD installed), else a built-in list of the
 common ones (local runs, tests). Either way the built-in list is added, and
 the answer is computed once per process.
-
-Getting this wrong only blurs the duplicate check and the diff: a
-cluster-scoped kind taken for namespaced would get a namespace in its identity.
 """
 from __future__ import annotations
 
@@ -39,7 +36,6 @@ _cache: set[tuple[str, str]] | None = None   # (group, kind); "" is the core gro
 
 
 def _get(path: str, token: str, ctx: ssl.SSLContext) -> dict:
-    """GET a discovery path of the cluster's API with the pod's token."""
     req = urllib.request.Request(API + path, headers={"Authorization": f"Bearer {token}"})
     with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
         return json.loads(r.read())
@@ -67,7 +63,6 @@ def discover() -> set[tuple[str, str]] | None:
 
 
 def cluster_scoped() -> set[tuple[str, str]]:
-    """The known cluster-scoped (group, kind) pairs, computed once."""
     global _cache
     if _cache is None:
         _cache = (discover() or set()) | BUILTIN
@@ -75,5 +70,4 @@ def cluster_scoped() -> set[tuple[str, str]]:
 
 
 def is_cluster_scoped(r: dict) -> bool:
-    """Whether a resource's kind has no namespace."""
     return (r.get("apiVersion", "").rpartition("/")[0], r.get("kind", "")) in cluster_scoped()

@@ -4,20 +4,6 @@ with a render-only Argo CD, check what comes out, and report the differences.
   python -m gitops_check --repo . --base origin/main --head HEAD \\
       --server http://argocd-preview-server.argocd-preview.svc   # token: $ARGOCD_TOKEN
 
-A run, in order:
- 1. resolve --base and --head to commits; check out each in a worktree of the
-    clone (before/, after/), to read files at either revision;
- 2. read .gitops-check.yaml at the head (a pull request that changes the
-    entry points is checked with its own); check that the head contains the
-    base (else 'after' is not what the merge gives);
- 3. delete Applications left in the preview by runs that died;
- 4. render before, then after (render.py), each under its own name prefix;
- 5. run the checks on after (checks.py) and diff before with after (diff.py);
- 6. delete what the run created (always, even after an error), remove the
-    worktrees;
- 7. print the whole report, write it to --report, and post it, cut to what
-    a comment holds, on the pull request.
-
 Exit status: 0 no error, 1 errors (the merge is blocked), 2 the check itself
 could not run (unknown revision, no configuration, the preview unreachable
 or refusing the token): the status fails as well, with the cause in the log.
@@ -43,7 +29,6 @@ STALE_AFTER = datetime.timedelta(hours=2)
 
 
 def git(repo: Path, *args: str) -> str:
-    """Run git in the clone; its output, stripped. Raises on failure."""
     return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
 
 
@@ -53,7 +38,6 @@ def log(msg: str) -> None:
 
 
 def remove_stale(argo: ArgoCD, run: str) -> None:
-    """Applications left by runs that died before their cleanup."""
     now = datetime.datetime.now(datetime.UTC)
     for a in argo.list_apps(RUN_LABEL):
         md = a.get("metadata", {})
@@ -120,8 +104,6 @@ def main(argv: list[str] | None = None) -> int:
             except ArgoError as e:
                 warnings.append(f"stale Applications not checked: {e}")
 
-            # Before: only the entry points that exist at the base (a pull
-            # request may add one); after: all of them.
             log(f"rendering before ({base[:10]})")
             rb = Renderer(argo, cfg, f"{run}-b", base)
             renderers.append(rb)
@@ -132,8 +114,6 @@ def main(argv: list[str] | None = None) -> int:
             after = ra.render()
             log(f"rendered {len(before.apps)} and {len(after.apps)} Applications")
 
-            # Not the pull request's fault, but worth knowing: its "repaired"
-            # Applications show in the diff.
             broken_before = sum(1 for x in before.apps.values() if x.error) + len(before.errors)
             if broken_before:
                 warnings.append(f"the target branch itself has {broken_before} render error(s)")
@@ -152,8 +132,6 @@ def main(argv: list[str] | None = None) -> int:
                 warnings += w
             diffs = diff.compare(before, after)
         except ArgoError as e:
-            # Only what isn't tied to one Application gets here (render.py
-            # records those in the result): the preview is down or refuses us.
             print(f"ERROR: render-only Argo CD: {e}", file=sys.stderr)
             return 2
         finally:
@@ -166,8 +144,6 @@ def main(argv: list[str] | None = None) -> int:
 
     args = {"errors": errors, "warnings": warnings, "diffs": diffs, "base": base, "head": head,
             "counts": (len(before.apps), len(after.apps))}
-    # The whole report for the log and --report; the comment is cut to what
-    # Forgejo holds, and points at the log for the rest.
     full = report.markdown(**args, limit=None)
     print(full)
     if a.report:
@@ -177,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
             Forgejo(a.forgejo_url, a.forgejo_repo, token_from_git_credentials(a.git_credentials),
                     a.cafile).upsert_comment(a.pr, report.markdown(**args))
             log(f"report posted on pull request #{a.pr}")
-        except (OSError, ValueError) as e:   # the status still tells the outcome
+        except (OSError, ValueError) as e:
             print(f"WARNING: report not posted: {e}", file=sys.stderr)
     return 1 if errors else 0
 

@@ -1,10 +1,3 @@
-"""The report: Markdown, for the pull request comment and the run's log.
-
-Layout: the hidden marker (forgejo.py finds its comment by it), passed or
-failed, what was rendered, the errors, the warnings, a table of the changed
-Applications, then one collapsible <details> block per Application with its
-added and removed resources and a diff per changed resource.
-"""
 from __future__ import annotations
 
 from .diff import AppDiff

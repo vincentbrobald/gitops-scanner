@@ -1,25 +1,4 @@
-"""Render a revision of the repository the way Argo CD would.
-
-The rendering itself is Argo CD's: nothing here templates Helm charts or
-builds kustomizations. This module decides *what* to submit to the
-render-only Argo CD (argocd-preview), in which form, and in which order.
-
-The walk (Renderer.render), per entry point of .gitops-check.yaml:
-
-    queue = [stand-in Application for the entry point's directory]
-    while queue:
-        app = queue.pop(0)                    # breadth first
-        skip it if its key (namespace/name) was rendered already
-        skip it (no render) if its sources are all on external repositories
-        rewrite it, submit it, read back its manifests
-        Application in the manifests    -> queue it (a child of app)
-        ApplicationSet in the manifests -> generate it once, queue its Applications
-
-So exactly what Argo CD would reach from the entry points is rendered, and
-nothing else: an overlay nobody points at is never looked at (the
-"unreached directories" check reports it instead).
-
-What is submitted is rewritten so that it renders and can never deploy:
+"""What is submitted is rewritten so that it renders and can never deploy:
 - metadata: a run-specific name in the preview's namespace (the original name
   is kept as a label, the key in App.name, for the report);
 - no syncPolicy, operation, status or finalizers (the preview has no
@@ -40,19 +19,12 @@ from .argocd import ArgoCD, ArgoError
 from .config import Config, Entrypoint, same_repo
 
 RUN_LABEL = "gitops-check/run"        # on every submitted Application: <run>-b / <run>-a
-ORIGIN_LABEL = "gitops-check/app"     # the Application's name in the repository
+ORIGIN_LABEL = "gitops-check/app"
 HELM_HOOK = "helm.sh/hook"
-# Original names already rendered are skipped, which ends the usual cycles
-# (an app-of-apps listing itself); this bound ends any other.
 MAX_APPS = 500
 
 
 def app_key(app: dict, home: tuple[str, ...] = ("argocd",)) -> str:
-    """An Application's identity: its name, prefixed with its namespace
-    unless that is a home namespace (argocd, where the platform's
-    Applications live, and the preview's, where an ApplicationSet's
-    Applications come out), so that Applications of the same name in other
-    namespaces (each team's Argo CD has a "root") don't hide one another."""
     md = app.get("metadata") or {}
     ns, name = md.get("namespace") or "argocd", md.get("name", "")
     return name if ns in home else f"{ns}/{name}"
@@ -60,13 +32,11 @@ def app_key(app: dict, home: tuple[str, ...] = ("argocd",)) -> str:
 
 @dataclasses.dataclass
 class App:
-    """One Application as rendered, identified by its key (app_key: the
-    name in the repository, which is what before and after have in common)."""
     name: str                        # key: [namespace/]name
-    entrypoint: str                  # the entry point whose walk reached it
+    entrypoint: str
     parent: str | None               # original name of the Application that rendered it; None: a stand-in
     spec: dict                       # as submitted (rewritten): its sources tell where it came from
-    resources: list[dict] = dataclasses.field(default_factory=list)   # what Argo CD rendered
+    resources: list[dict] = dataclasses.field(default_factory=list)
     error: str | None = None         # Argo CD's error when it couldn't render; resources is empty then
     external: bool = False           # sources all on external repositories: not rendered
     project: str = "default"         # as written (spec is submitted with 'default')
@@ -74,7 +44,6 @@ class App:
 
 @dataclasses.dataclass
 class Rendering:
-    """Everything one revision renders to: the input of the checks and the diff."""
     revision: str
     apps: dict[str, App] = dataclasses.field(default_factory=dict)
     errors: list[str] = dataclasses.field(default_factory=list)     # not tied to one app (ApplicationSets)
@@ -99,19 +68,16 @@ def preview_name(run: str, original: str) -> str:
 
 
 def _project(app: dict) -> str:
-    """An Application's project as written."""
     return (app.get("spec") or {}).get("project") or "default"
 
 
 def _sources(spec: dict) -> list[dict]:
-    """An Application spec's sources: 'sources' (multi-source) or the single 'source'."""
     if spec.get("sources"):
         return spec["sources"]
     return [spec["source"]] if spec.get("source") else []
 
 
 def pin_revision(source: dict, cfg: Config, revision: str) -> bool:
-    """Pin a source on this repository that tracks a branch to the commit under test."""
     if same_repo(source.get("repoURL", ""), cfg.repo_url) and \
             (source.get("targetRevision") or "HEAD") in cfg.tracked_revisions:
         source["targetRevision"] = revision
@@ -120,8 +86,6 @@ def pin_revision(source: dict, cfg: Config, revision: str) -> bool:
 
 
 def rewrite_app(app: dict, *, run: str, cfg: Config, revision: str, namespace: str) -> dict:
-    """A copy of an Application, made safe to submit to the preview and
-    pinned to the revision under test (see the module docstring)."""
     a = copy.deepcopy(app)
     original = a["metadata"]["name"]
     a["metadata"] = {"name": preview_name(run, app_key(app, ("argocd", namespace)).replace("/", "-")), "namespace": namespace,
@@ -137,8 +101,6 @@ def rewrite_app(app: dict, *, run: str, cfg: Config, revision: str, namespace: s
 
 
 def _walk_generators(gens: list[dict], cfg: Config, revision: str) -> None:
-    """Pin the git generators on this repository to the revision under test,
-    including those nested in matrix and merge generators (in place)."""
     for g in gens or []:
         if "git" in g:
             git = g["git"]
@@ -154,9 +116,7 @@ def rewrite_appset(appset: dict, *, cfg: Config, revision: str, namespace: str) 
     """A copy of an ApplicationSet for the preview's generate API: in the
     preview's namespace (it refuses any other), git generators pinned, the
     template's project 'default' (the preview has no other; Renderer._generate
-    puts the written one back on the generated Applications). The rest of the
-    template is left alone: the Applications it generates are rewritten like
-    any other before they are submitted."""
+    puts the written one back on the generated Applications)."""
     s = copy.deepcopy(appset)
     s["metadata"] = {"name": s["metadata"]["name"], "namespace": namespace}
     s.pop("status", None)
@@ -168,10 +128,6 @@ def rewrite_appset(appset: dict, *, cfg: Config, revision: str, namespace: str) 
 
 
 def entry_app(entry: Entrypoint, cfg: Config) -> dict:
-    """The stand-in for an entry point: the Application Argo CD would need to
-    deploy the entry point's directory (a directory source on this
-    repository, rewritten and pinned like any other; recursive when the entry
-    point says so). Its output is what the walk starts from."""
     source = {"repoURL": cfg.repo_url, "targetRevision": cfg.tracked_revisions[0], "path": entry.path}
     if entry.recurse:
         source["directory"] = {"recurse": True}
@@ -189,8 +145,8 @@ class Renderer:
 
     def __init__(self, argo: ArgoCD, cfg: Config, run: str, revision: str):
         self.argo, self.cfg, self.run, self.revision = argo, cfg, run, revision
-        self.created: list[str] = []          # preview names, for cleanup()
-        self.home = ("argocd", argo.namespace)   # namespaces whose Applications are keyed by name alone
+        self.created: list[str] = []
+        self.home = ("argocd", argo.namespace)
 
     def render(self, entrypoints: list[Entrypoint] | None = None) -> Rendering:
         """Walk from the entry points (default: all of the configuration's;
@@ -208,7 +164,7 @@ class Renderer:
                     break
                 app, parent = queue.pop(0)
                 name = app_key(app, self.home)
-                if name in out.apps:      # the app-of-apps lists itself
+                if name in out.apps:
                     continue
                 if self._external(app):
                     out.apps[name] = App(name, entry.name, parent, app, external=True, project=_project(app))
@@ -223,29 +179,21 @@ class Renderer:
                         if set_name not in generated:
                             generated.add(set_name)
                             queue.extend((a, name) for a in self._generate(r, name, out))
-            # An Application of the entry point's own directory (the app-of-apps
-            # listing itself) is the real one: the stand-in would duplicate it.
             sname = synthetic["metadata"]["name"]
             if any(a.name != sname and self._covers(a, entry.path) for a in out.apps.values()):
                 out.apps.pop(sname, None)
         return out
 
     def _external(self, app: dict) -> bool:
-        """Whether every source is on an external repository (.gitops-check.yaml
-        external: e.g. the teams' repositories, which the preview can't read
-        and a platform change doesn't touch)."""
         srcs = _sources(app.get("spec", {}))
         return bool(srcs) and bool(self.cfg.external) and all(
             (s.get("repoURL") or "").strip().lower().startswith(tuple(self.cfg.external)) for s in srcs)
 
     def _covers(self, app: App, path: str) -> bool:
-        """Whether an Application deploys this repository's directory `path`."""
         return any(same_repo(s.get("repoURL", ""), self.cfg.repo_url) and (s.get("path") or "").strip("/") == path
                    for s in _sources(app.spec.get("spec", {})))
 
     def _render_app(self, app: dict, entry: str, parent: str | None) -> App:
-        """Rewrite, submit (Argo CD validates it, which renders its sources:
-        a bad path or chart fails here) and read back one Application."""
         original = app_key(app, self.home)
         spec = rewrite_app(app, run=self.run, cfg=self.cfg, revision=self.revision, namespace=self.argo.namespace)
         a = App(original, entry, parent, spec, project=_project(app))
@@ -258,9 +206,6 @@ class Renderer:
         return a
 
     def _generate(self, appset: dict, parent: str, out: Rendering) -> list[dict]:
-        """The Applications an ApplicationSet generates (Argo CD's own
-        generators and templates; nothing is stored in the preview). The set
-        is also kept for the reachability check (what its git generators read)."""
         name = appset.get("metadata", {}).get("name", "?")
         out.appsets.append(appset)
         try:
@@ -271,7 +216,6 @@ class Renderer:
             return []
         if not apps:
             out.warnings.append(f"ApplicationSet {name} (from {parent}) generates no Application")
-        # The project as written, for the projects check (unless templated).
         project = str(((appset.get("spec") or {}).get("template") or {}).get("spec", {}).get("project") or "default")
         if "{{" not in project:
             for a in apps:

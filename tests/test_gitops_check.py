@@ -1,7 +1,3 @@
-"""Unit tests: configuration, rewriting and the walk (against an in-memory
-fake Argo CD), each check, the diff and the report. Whole runs over HTTP
-and git are in test_integration.py."""
-
 import copy
 
 import pytest
@@ -47,8 +43,6 @@ def app(name, path="x", repo=REPO, rev="main", **spec):
                      "syncPolicy": {"automated": {}}, **spec}}
 
 
-# -- config -------------------------------------------------------------------
-
 def test_config(cfg):
     assert cfg.entrypoints[0].path == "clusters/lab/addons"
     assert cfg.server("lab") == "https://kubernetes.default.svc"
@@ -78,8 +72,6 @@ def test_same_repo():
     assert config.same_repo(REPO, REPO.upper().removesuffix(".GIT") + "/")
     assert not config.same_repo(REPO, "https://forge.example/org/gitops.git")
 
-
-# -- rewriting ----------------------------------------------------------------
 
 def test_preview_name():
     assert preview_name("r1", "addons") == "r1-addons"
@@ -118,10 +110,8 @@ def test_rewrite_appset_nested_generators(cfg):
     assert r["metadata"]["namespace"] == "p"
     assert r["spec"]["generators"][0]["matrix"]["generators"][1]["git"]["revision"] == "abc"
     assert r["spec"]["generators"][1]["git"]["revision"] == "v1"
-    assert s["spec"]["generators"][1]["git"]["revision"] == "v1"   # input untouched
+    assert s["spec"]["generators"][1]["git"]["revision"] == "v1"
 
-
-# -- rendering ----------------------------------------------------------------
 
 class FakeArgo:
     """Renders from a dict: path -> resources; a path 'broken' fails."""
@@ -156,13 +146,11 @@ def test_render_follows_apps_and_appsets(cfg):
     argo = FakeArgo(tree, {"set": [app("from-set", "gen")]})
     r = Renderer(argo, cfg, "r1", "abc")
     out = r.render()
-    # addons lists itself (rendered once); it covers the entry point, whose stand-in is dropped
     assert set(out.apps) == {"addons", "web", "from-set"}
     assert out.apps["web"].parent == "entrypoint-lab"
     assert checks.duplicates(out) == ([], [])
     assert argo.apps["r1-web"]["spec"]["source"]["targetRevision"] == "abc"
     assert len(out.appsets) == 1
-    # the preview knows only 'default'; the written project is kept for the projects check
     assert argo.generated["spec"]["template"]["spec"]["project"] == "default"
     assert out.apps["from-set"].project == "tenants" and out.apps["web"].project == "infra"
     assert argo.apps["r1-from-set"]["spec"]["project"] == "default"
@@ -175,14 +163,12 @@ def test_render_records_errors(cfg):
                                     {"apiVersion": "argoproj.io/v1alpha1", "kind": "ApplicationSet",
                                      "metadata": {"name": "empty"}, "spec": {}}]}
     out = Renderer(FakeArgo(tree, {"empty": []}), cfg, "r", "abc").render()
-    assert "entrypoint-lab" in out.apps          # no Application covers the entry point: kept
+    assert "entrypoint-lab" in out.apps
     assert "InvalidSpecError" in out.apps["bad"].error
     assert out.warnings == ["ApplicationSet empty (from entrypoint-lab) generates no Application"]
     errors, _ = checks.render_errors(out)
     assert errors == ["bad: InvalidSpecError: Unable to generate manifests in broken"]
 
-
-# -- checks -------------------------------------------------------------------
 
 def rendering(**apps):
     r = Rendering("abc")
@@ -231,7 +217,7 @@ def test_duplicates_namespace_from_destination():
     r = rendering(a=({"destination": {"namespace": "one"}}, [svc, ns]),
                   b=({"destination": {"namespace": "two"}}, [svc, ns]))
     errors, _ = checks.duplicates(r)
-    assert errors == ["Namespace shared is rendered by both a and b"]   # the Services are in two namespaces
+    assert errors == ["Namespace shared is rendered by both a and b"]
 
 
 def test_unreached(cfg, tmp_path):
@@ -287,11 +273,9 @@ def test_projects(cfg):
     r.apps["good"].entrypoint = "samples"
     r.apps["good"].project, r.apps["good"].spec["spec"]["source"] = "nope", {"repoURL": "x"}
     cfg.entrypoints.append(config.Entrypoint("samples", "lab", "samples", deployed=False))
-    assert len(checks.projects(r, cfg)[0]) == 6   # samples aren't checked
+    assert len(checks.projects(r, cfg)[0]) == 6
     assert checks.projects(rendering(good=({"destination": dest}, [cm])), cfg) == ([], [])
 
-
-# -- diff and report ----------------------------------------------------------
 
 def test_compare():
     dep = {"apiVersion": "apps/v1", "kind": "Deployment",
@@ -302,7 +286,7 @@ def test_compare():
     before = rendering(same=({}, [dep]), scaled=({}, [dep]), gone=({}, [dep]))
     after = rendering(same=({}, [moved]), scaled=({}, [scaled]), new=({}, [dep]))
     d = {x.app: x for x in diff.compare(before, after)}
-    assert set(d) == {"scaled", "gone", "new"}            # tracking-id is noise
+    assert set(d) == {"scaled", "gone", "new"}
     assert d["new"].status == "added" and d["gone"].status == "removed"
     assert "-  replicas: 1\n+  replicas: 2" in d["scaled"].changed["apps/Deployment n/d"]
 
@@ -380,13 +364,10 @@ def test_render_same_name_other_namespaces_and_external(tmp_path):
             "demo": [], "b": []}
     argo = FakeArgo(tree)
     out = Renderer(argo, c, "r", "abc").render()
-    # three Applications named root: none hides another
     assert {"root", "team-a/root", "team-b/root"} <= set(out.apps)
-    # the tenant's: not submitted (the preview couldn't read it)
     assert out.apps["team-a/root"].external and out.apps["team-a/root"].error is None
     assert "r-team-a-root" not in argo.apps and "r-team-b-root" in argo.apps
     assert argo.apps["r-team-b-root"]["metadata"]["labels"]["gitops-check/app"] == "root"
-    # an ApplicationSet's Applications come out in the preview's namespace: plain names
     gen = app("from-set", "b")
     gen["metadata"]["namespace"] = FakeArgo.namespace
     assert render.app_key(gen, ("argocd", FakeArgo.namespace)) == "from-set"

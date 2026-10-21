@@ -8,7 +8,7 @@ is checked with it. Keys (see the repository's file for a commented example):
     argocd.version               the Argo CD the preview must match (informational)
     clusters[]                   name, server: destinations of the stand-in Applications
     entrypoints[]                name, cluster, path: where the walk starts;
-                                 deployed: false marks examples (informational);
+                                 deployed: false marks examples;
                                  recurse: true reads subdirectories too (directory.recurse,
                                  as the root Application that syncs the directory does)
     ignore[]                     path, reason: directories no entry point reaches, on purpose
@@ -36,32 +36,29 @@ class Cluster:
 
 @dataclasses.dataclass
 class Entrypoint:
-    """A directory of the repository the walk starts from (render.py)."""
     name: str
-    cluster: str                     # whose server the stand-in Application deploys to
+    cluster: str
     path: str                        # relative to the repository root, no surrounding slashes
-    deployed: bool = True            # informational: False for examples nothing syncs
-    recurse: bool = False            # the stand-in reads subdirectories (directory.recurse)
+    deployed: bool = True
+    recurse: bool = False
 
 
 @dataclasses.dataclass
 class Config:
-    """The parsed file; see the module docstring for the keys."""
     repo_url: str
     tracked_revisions: list[str]
-    argocd_version: str              # informational: not compared with the preview's
+    argocd_version: str
     clusters: dict[str, Cluster]
     entrypoints: list[Entrypoint]
     ignore: list[str]                # paths, no surrounding slashes
     external: list[str] = dataclasses.field(default_factory=list)   # repoURL prefixes, lower case
 
     def server(self, cluster: str) -> str:
-        """The API server URL of a cluster named in the file."""
         return self.clusters[cluster].server
 
 
 def load(path: Path) -> Config:
-    """Parse and validate the file. Raises ConfigError (the run exits 2)."""
+    """Raises ConfigError (the run exits 2)."""
     try:
         d = yaml.safe_load(path.read_text())
     except (OSError, yaml.YAMLError) as e:
