@@ -417,3 +417,14 @@ def test_compare_failed_before():
     d = {x.app: x for x in diff.compare(before, rendering(fixed=({}, [dep])))}
     assert d["fixed"].status == "repaired" and d["fixed"].added == ["apps/Deployment n/d"]
     assert d["dropped"].status == "removed" and d["dropped"].removed == []
+
+
+def test_render_stops_once_at_max_apps(cfg, monkeypatch):
+    """Reaching MAX_APPS ends the whole walk with one error, not one per later entry point."""
+    monkeypatch.setattr(render, "MAX_APPS", 2)
+    cfg.entrypoints.append(config.Entrypoint("second", "lab", "other"))
+    cfg.entrypoints.append(config.Entrypoint("third", "lab", "more"))
+    tree = {"clusters/lab/addons": [app("a", "p"), app("b", "p")], "other": [app("c", "p")],
+            "more": [app("d", "p")], "p": []}
+    out = Renderer(FakeArgo(tree), cfg, "r", "abc").render()
+    assert out.errors == ["more than 2 Applications: stopped (a cycle?)"]

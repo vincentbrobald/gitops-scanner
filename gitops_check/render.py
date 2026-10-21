@@ -182,17 +182,21 @@ class Renderer:
         out = Rendering(self.revision)
         # ApplicationSets already generated, by key, across all entry points.
         generated: set[str] = set()
+        stopped = False
         for entry in entrypoints if entrypoints is not None else self.cfg.entrypoints:
+            if stopped:
+                break
             synthetic = entry_app(entry, self.cfg)
             # Breadth-first walk: each rendered Application queues the Applications
             # it renders and those its ApplicationSets generate, with its key as
             # their parent. An Application already rendered (by key) is skipped,
             # so one reached twice or from two entry points is rendered once.
-            # Reaching MAX_APPS ends this entry point's walk with an error.
+            # Reaching MAX_APPS ends the whole walk with one error.
             queue: list[tuple[dict, str | None]] = [(synthetic, None)]
             while queue:
                 if len(out.apps) >= MAX_APPS:
                     out.errors.append(f"more than {MAX_APPS} Applications: stopped (a cycle?)")
+                    stopped = True
                     break
                 app, parent = queue.pop(0)
                 name = app_key(app, self.home)
