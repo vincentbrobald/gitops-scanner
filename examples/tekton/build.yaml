@@ -73,7 +73,7 @@ spec:
                 mkdir -p .build
                 /kaniko/executor --context="dir://$(workspaces.source.path)" --dockerfile=Containerfile \
                   --build-arg "BASE=$registry/docker.io/library/python:3.14.7-alpine3.24" \
-                  --build-arg "GO_BASE=$registry/docker.io/library/golang:1.26.9-trixie" \
+                  --build-arg "GO_BASE=$registry/docker.io/library/golang:1.26.10-trixie" \
                   --registry-certificate "$registry=$(workspaces.ca.path)/site-root-ca.crt" \
                   --label "org.opencontainers.image.revision={{ revision }}" \
                   --label "org.opencontainers.image.source={{ repo_url }}" \
