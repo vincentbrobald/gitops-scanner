@@ -73,16 +73,16 @@ def compare(before: Rendering, after: Rendering) -> list[AppDiff]:
             out.append(AppDiff(name, "failed"))
             continue
         # The order of these tests matters: a failure after wins, then a new
-        # Application, then a repaired one. An Application that failed before and
-        # is gone after reaches "repaired" with a None, and sorted(None) raises.
+        # Application, then a removed one (even if it failed before: it is gone
+        # either way), then a repaired one.
         if b is None:
             out.append(AppDiff(name, "added", added=sorted(a)))
             continue
-        if before.apps[name].error:
-            out.append(AppDiff(name, "repaired", added=sorted(a)))
-            continue
         if a is None:
             out.append(AppDiff(name, "removed", removed=sorted(b)))
+            continue
+        if before.apps[name].error:
+            out.append(AppDiff(name, "repaired", added=sorted(a)))
             continue
         d = AppDiff(name, "changed", added=sorted(set(a) - set(b)), removed=sorted(set(b) - set(a)))
         for k in sorted(set(a) & set(b)):

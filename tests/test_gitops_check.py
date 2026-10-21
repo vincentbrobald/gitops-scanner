@@ -407,3 +407,13 @@ def test_render_same_name_other_namespaces_and_external(tmp_path):
     gen = app("from-set", "b")
     gen["metadata"]["namespace"] = FakeArgo.namespace
     assert render.app_key(gen, ("argocd", FakeArgo.namespace)) == "from-set"
+
+
+def test_compare_failed_before():
+    """An Application that failed before is "repaired" if it renders after, "removed" if it is gone."""
+    dep = {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "d", "namespace": "n"}}
+    before = rendering(fixed=({}, []), dropped=({}, []))
+    before.apps["fixed"].error = before.apps["dropped"].error = "InvalidSpecError"
+    d = {x.app: x for x in diff.compare(before, rendering(fixed=({}, [dep])))}
+    assert d["fixed"].status == "repaired" and d["fixed"].added == ["apps/Deployment n/d"]
+    assert d["dropped"].status == "removed" and d["dropped"].removed == []
