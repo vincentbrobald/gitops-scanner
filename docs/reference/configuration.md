@@ -32,7 +32,7 @@ external:                              # repositories outside the check
 | `argocd.version` | no | Documentation: the preview must run the clusters' Argo CD, or the diff shows false changes. Not compared at run time |
 | `clusters[].name`, `.server` | yes, per entry point's cluster | The stand-in Applications deploy to `server`. The preview registers the same clusters (with the same labels, for cluster generators) |
 | `entrypoints[].name`, `.cluster`, `.path` | yes | A directory of manifests (Applications, ApplicationSets, or a kustomization producing them); the walk starts there |
-| `entrypoints[].deployed` | no (`true`) | Informational: `false` marks examples nothing syncs |
+| `entrypoints[].deployed` | no (`true`) | `false` marks examples nothing syncs: their Applications are rendered, but not checked against the AppProjects |
 | `entrypoints[].recurse` | no (`false`) | Read subdirectories too (`directory.recurse`), as the root Application that syncs the directory does |
 | `ignore[].path`, `.reason` | no | Directories exempt from the "unreached" check, and everything below them |
 | `external[].prefix`, `.reason` | no | Repository URL prefixes (case ignored) outside the check: an Application whose sources are all there (e.g. a team's own app-of-apps on the team's repository) is listed but not rendered, as the preview may not read those repositories and a change here doesn't touch them |
