@@ -13,9 +13,11 @@ import ssl
 import urllib.request
 from pathlib import Path
 
+# In-cluster service account files and the API server address.
 SA = Path("/var/run/secrets/kubernetes.io/serviceaccount")
 API = "https://kubernetes.default.svc"
 
+# Cluster-scoped kinds as (group, kind), always included.
 BUILTIN = {
     ("", "Namespace"), ("", "Node"), ("", "PersistentVolume"), ("", "ComponentStatus"),
     ("rbac.authorization.k8s.io", "ClusterRole"), ("rbac.authorization.k8s.io", "ClusterRoleBinding"),
@@ -36,6 +38,7 @@ _cache: set[tuple[str, str]] | None = None   # (group, kind); "" is the core gro
 
 
 def _get(path: str, token: str, ctx: ssl.SSLContext) -> dict:
+    """GET path from the API server with the service account token; the decoded JSON. Errors raise."""
     req = urllib.request.Request(API + path, headers={"Authorization": f"Bearer {token}"})
     with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
         return json.loads(r.read())
@@ -51,6 +54,8 @@ def discover() -> set[tuple[str, str]] | None:
         ctx = ssl.create_default_context(cafile=str(SA / "ca.crt"))
         versions = ["/api/v1"] + [f"/apis/{g['preferredVersion']['groupVersion']}"
                                   for g in _get("/apis", token, ctx)["groups"]]
+        # "/apis/<group>/<version>" -> group; "/api/v1" is the core group "".
+        # Names with "/" are subresources (e.g. namespaces/status), not kinds.
         scoped = set()
         for v in versions:
             group = v.split("/")[2] if v.startswith("/apis/") else ""
@@ -63,6 +68,7 @@ def discover() -> set[tuple[str, str]] | None:
 
 
 def cluster_scoped() -> set[tuple[str, str]]:
+    """The cluster-scoped (group, kind) pairs: discovered ones plus BUILTIN, computed on the first call."""
     global _cache
     if _cache is None:
         _cache = (discover() or set()) | BUILTIN
@@ -70,4 +76,5 @@ def cluster_scoped() -> set[tuple[str, str]]:
 
 
 def is_cluster_scoped(r: dict) -> bool:
+    """Whether resource r's kind is cluster-scoped (by its apiVersion's group and its kind)."""
     return (r.get("apiVersion", "").rpartition("/")[0], r.get("kind", "")) in cluster_scoped()

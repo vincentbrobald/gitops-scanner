@@ -31,12 +31,19 @@ class ArgoCD:
     the first render of a large chart includes fetching it."""
 
     def __init__(self, server: str, token: str, namespace: str = "argocd-preview", timeout: float = 300):
+        """Keep the connection settings; no request is made yet. timeout is in seconds, per request."""
         self.base = server.rstrip("/")
         self.token = token
         self.namespace = namespace
         self.timeout = timeout
 
     def _call(self, method: str, path: str, body: dict | None = None, **params) -> dict:
+        """Call /api/v1/<path> with the bearer token and return the decoded JSON body ({} if empty).
+
+        params become the query string, booleans as "true"/"false"; body is sent
+        as JSON. Raises ArgoError with Argo CD's "message" on an HTTP error (or
+        the status when it has none), or with the transport error.
+        """
         url = f"{self.base}/api/v1/{path}"
         if params:
             url += "?" + urllib.parse.urlencode({k: str(v).lower() if isinstance(v, bool) else v
@@ -74,6 +81,7 @@ class ArgoCD:
         self._call("DELETE", f"applications/{urllib.parse.quote(name)}", cascade=False, appNamespace=self.namespace)
 
     def list_apps(self, selector: str) -> list[dict]:
+        """The Applications of the preview's namespace that match the label selector."""
         return self._call("GET", "applications", selector=selector, appNamespace=self.namespace).get("items") or []
 
     def generate(self, appset: dict) -> list[dict]:

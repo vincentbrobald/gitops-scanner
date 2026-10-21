@@ -1,7 +1,9 @@
+"""The report in Markdown, for the log, --report and the pull request comment."""
 from __future__ import annotations
 
 from .diff import AppDiff
 
+# Hidden first line by which forgejo.upsert_comment finds the previous report.
 MARKER = "<!-- gitops-check -->"
 LIMIT = 60000   # Forgejo comments hold 65535 characters
 
@@ -35,6 +37,8 @@ def markdown(*, errors: list[str], warnings: list[str], diffs: list[AppDiff], ba
                 body += ["", f"`{r}`", "", "```diff", text.rstrip("\n"), "```"]
             body += ["", "</details>", ""]
             details.append("\n".join(body))
+        # Append the per-Application details while they fit, keeping 200
+        # characters for the note on what was left out.
         text = "\n".join(out)
         for i, block in enumerate(details):
             if limit is not None and len(text) + len(block) > limit - 200:

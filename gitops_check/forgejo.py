@@ -32,11 +32,16 @@ class Forgejo:
     when Forgejo's certificate isn't publicly trusted."""
 
     def __init__(self, url: str, repo: str, token: str, cafile: str | None = None):
+        """url: Forgejo's base URL; repo: owner/name; token: an API token. No request is made yet."""
         self.api = f"{url.rstrip('/')}/api/v1/repos/{repo}"
         self.token = token
         self.ctx = ssl.create_default_context(cafile=cafile) if cafile else None
 
     def _call(self, method: str, path: str, body: dict | None = None):
+        """Call the repository's API at path and return the decoded JSON body (None if empty).
+
+        Errors are not caught: urllib's HTTPError/URLError (OSError) reach the caller.
+        """
         req = urllib.request.Request(f"{self.api}/{path}", method=method,
                                      data=json.dumps(body).encode() if body is not None else None,
                                      headers={"Authorization": f"token {self.token}",

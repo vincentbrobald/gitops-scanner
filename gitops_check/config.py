@@ -36,6 +36,11 @@ class Cluster:
 
 @dataclasses.dataclass
 class Entrypoint:
+    """Where the walk starts (entrypoints[]): a directory of Applications on a cluster.
+
+    deployed: False for examples, which the project check skips; recurse: the
+    directory's subdirectories are read too (and count as reached).
+    """
     name: str
     cluster: str
     path: str                        # relative to the repository root, no surrounding slashes
@@ -45,6 +50,7 @@ class Entrypoint:
 
 @dataclasses.dataclass
 class Config:
+    """The parsed .gitops-check.yaml (see the module docstring); clusters by name."""
     repo_url: str
     tracked_revisions: list[str]
     argocd_version: str
@@ -54,11 +60,17 @@ class Config:
     external: list[str] = dataclasses.field(default_factory=list)   # repoURL prefixes, lower case
 
     def server(self, cluster: str) -> str:
+        """The API server URL of the named cluster; KeyError if it is unknown."""
         return self.clusters[cluster].server
 
 
 def load(path: Path) -> Config:
-    """Raises ConfigError (the run exits 2)."""
+    """Read and check the configuration file path.
+
+    Paths lose their surrounding slashes and external prefixes are lower-cased.
+    Raises ConfigError (the run exits 2) when the file can't be read or parsed,
+    isn't a CheckConfig, lacks a key or names an unknown cluster.
+    """
     try:
         d = yaml.safe_load(path.read_text())
     except (OSError, yaml.YAMLError) as e:
@@ -91,5 +103,6 @@ def same_repo(a: str, b: str) -> bool:
     """Whether two repository URLs name the same repository: case, a trailing
     slash and ".git" don't matter (ssh:// and https:// URLs never match)."""
     def norm(u: str) -> str:
+        """The URL stripped, lower-cased, without a trailing slash or ".git"."""
         return u.strip().lower().rstrip("/").removesuffix(".git")
     return norm(a) == norm(b)

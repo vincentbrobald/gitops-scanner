@@ -27,6 +27,7 @@ entrypoints: [{{name: lab, cluster: lab, path: apps}}]
 
 
 def app_yaml(name: str, path: str) -> str:
+    """An Application (YAML) of the test repository at main, rendering path into namespace name."""
     return yaml.safe_dump({
         "apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
         "metadata": {"name": name, "namespace": "argocd"},
@@ -39,11 +40,13 @@ CONFIGMAP = "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: settings}\ndata: 
 
 
 def git(repo: Path, *args: str) -> str:
+    """Run git in repo; its stripped stdout. Raises CalledProcessError on failure."""
     return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
 
 
 @pytest.fixture
 def repo(tmp_path):
+    """An empty git repository on branch main, with a committer identity."""
     r = tmp_path / "gitops"
     r.mkdir()
     git(r, "init", "-q", "-b", "main")
@@ -53,6 +56,7 @@ def repo(tmp_path):
 
 
 def commit(repo: Path, files: dict[str, str | None], msg: str = "change") -> str:
+    """Write files (None deletes one), commit everything and return the commit's id."""
     for name, text in files.items():
         p = repo / name
         if text is None:
@@ -66,14 +70,19 @@ def commit(repo: Path, files: dict[str, str | None], msg: str = "change") -> str
 
 
 class FakeArgo(BaseHTTPRequestHandler):
+    """Argo CD's API as gitops-check calls it, rendering an Application by reading the
+    YAML files of its path in repo. The argo fixture subclasses it per test, with
+    fresh class attributes: apps (name -> Application) and calls (method, path)."""
     repo: Path
     apps: dict
     calls: list
 
     def log_message(self, *a):
+        # Silence the request log.
         pass
 
     def _send(self, code: int, body: dict | None = None):
+        """Answer with status code and body as JSON ({} when None)."""
         data = json.dumps(body or {}).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -81,10 +90,12 @@ class FakeArgo(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _body(self) -> dict:
+        """The request's JSON body, {} when it has none."""
         n = int(self.headers.get("Content-Length") or 0)
         return json.loads(self.rfile.read(n)) if n else {}
 
     def _render(self, app: dict) -> list[dict]:
+        """The YAML documents under the source path at its targetRevision (git); ValueError if none."""
         src = app["spec"]["source"]
         rev, path = src["targetRevision"], src["path"].strip("/")
         names = git(self.repo, "ls-tree", "-r", "--name-only", rev, "--", path).splitlines()
@@ -97,6 +108,8 @@ class FakeArgo(BaseHTTPRequestHandler):
         return docs
 
     def do_POST(self):
+        """Create an Application (validated by rendering it), or generate from a list
+        generator; 401 unless the token is "tok"."""
         u = urlsplit(self.path)
         self.calls.append(("POST", u.path))
         if self.headers.get("Authorization") != "Bearer tok":
@@ -116,6 +129,7 @@ class FakeArgo(BaseHTTPRequestHandler):
         self._send(404, {"message": "not found"})
 
     def do_GET(self):
+        """An Application's manifests, or the Applications having the selector as a label key."""
         u = urlsplit(self.path)
         self.calls.append(("GET", u.path))
         if u.path.endswith("/manifests"):
@@ -127,6 +141,7 @@ class FakeArgo(BaseHTTPRequestHandler):
         self._send(404, {"message": "not found"})
 
     def do_DELETE(self):
+        """Delete an Application; the client must ask for cascade=false."""
         u = urlsplit(self.path)
         self.calls.append(("DELETE", u.path))
         assert parse_qs(u.query).get("cascade") == ["false"]
@@ -136,6 +151,7 @@ class FakeArgo(BaseHTTPRequestHandler):
 
 @pytest.fixture
 def argo(repo):
+    """A FakeArgo server on a free local port, with its own state: (handler class, URL)."""
     handler = type("H", (FakeArgo,), {"repo": repo, "apps": {}, "calls": []})
     srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -144,6 +160,7 @@ def argo(repo):
 
 
 def run_main(repo: Path, url: str, base: str, head: str, tmp_path: Path, monkeypatch) -> tuple[int, str]:
+    """Run the CLI with token "tok", run id "t", no schemas, and return (exit status, report file text)."""
     monkeypatch.setenv("ARGOCD_TOKEN", "tok")
     report = tmp_path / "report.md"
     code = cli.main(["--repo", str(repo), "--base", base, "--head", head, "--server", url,
@@ -152,6 +169,7 @@ def run_main(repo: Path, url: str, base: str, head: str, tmp_path: Path, monkeyp
 
 
 def test_main_passes_and_cleans_up(repo, argo, tmp_path, monkeypatch):
+    """A clean change passes, the added Application is reported, worktrees and Applications are removed."""
     handler, url = argo
     base = commit(repo, {".gitops-check.yaml": CONFIG, "apps/web.yaml": app_yaml("web", "web"), "web/cm.yaml": CONFIGMAP})
     head = commit(repo, {"apps/api.yaml": app_yaml("api", "api"),
@@ -168,6 +186,7 @@ def test_main_passes_and_cleans_up(repo, argo, tmp_path, monkeypatch):
 
 
 def test_main_logs_the_whole_report(repo, argo, tmp_path, monkeypatch, capsys):
+    """stdout gets every diff, even beyond the comment limit, and matches --report."""
     _, url = argo
     big = "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: big}\ndata: {blob: '%s'}\n"
     base = commit(repo, {".gitops-check.yaml": CONFIG, "apps/web.yaml": app_yaml("web", "web"),
@@ -182,6 +201,7 @@ def test_main_logs_the_whole_report(repo, argo, tmp_path, monkeypatch, capsys):
 
 
 def test_main_reports_changes_and_errors(repo, argo, tmp_path, monkeypatch):
+    """A render error and a Secret in clear fail the run; the diff is in the report."""
     _, url = argo
     base = commit(repo, {".gitops-check.yaml": CONFIG, "apps/web.yaml": app_yaml("web", "web"), "web/cm.yaml": CONFIGMAP})
     head = commit(repo, {"web/cm.yaml": CONFIGMAP.replace("one", "two"),
@@ -195,6 +215,7 @@ def test_main_reports_changes_and_errors(repo, argo, tmp_path, monkeypatch):
 
 
 def test_main_refuses_an_outdated_pull_request(repo, argo, tmp_path, monkeypatch):
+    """A head that doesn't contain the base commit is an error."""
     _, url = argo
     root = commit(repo, {".gitops-check.yaml": CONFIG, "apps/web.yaml": app_yaml("web", "web"), "web/cm.yaml": CONFIGMAP})
     git(repo, "branch", "feature")
@@ -207,6 +228,7 @@ def test_main_refuses_an_outdated_pull_request(repo, argo, tmp_path, monkeypatch
 
 
 def test_main_without_config_or_token(repo, argo, tmp_path, monkeypatch, capsys):
+    """No configuration or an unknown revision exits 2; no token is a usage error."""
     _, url = argo
     rev = commit(repo, {"README.md": "no config\n"})
     monkeypatch.setenv("ARGOCD_TOKEN", "tok")
@@ -219,6 +241,7 @@ def test_main_without_config_or_token(repo, argo, tmp_path, monkeypatch, capsys)
 
 
 def test_argocd_client(repo, argo):
+    """The client's calls against the fake, and its errors: refused spec, bad token, no server."""
     handler, url = argo
     commit(repo, {"web/cm.yaml": CONFIGMAP})
     a = ArgoCD(url, "tok")
@@ -240,28 +263,36 @@ def test_argocd_client(repo, argo):
 
 
 def test_forgejo_upsert_comment():
+    """The report comment is added once, then replaced; other comments are kept."""
     comments: list[dict] = []
 
     class H(BaseHTTPRequestHandler):
+        """Forgejo's comment API on the list comments."""
+
         def log_message(self, *a):
+            # Silence the request log.
             pass
 
         def _send(self, body):
+            """Answer 200 with body as JSON."""
             data = json.dumps(body).encode()
             self.send_response(200)
             self.end_headers()
             self.wfile.write(data)
 
         def do_GET(self):
+            """List the comments; the token must be sent as "token t0k"."""
             assert self.headers["Authorization"] == "token t0k"
             self._send(comments)
 
         def do_POST(self):
+            """Add a comment with the next id."""
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             comments.append({"id": len(comments) + 1, "body": body["body"]})
             self._send(comments[-1])
 
         def do_PATCH(self):
+            """Replace the body of the comment whose id ends the path."""
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             cid = int(self.path.rsplit("/", 1)[1])
             next(c for c in comments if c["id"] == cid)["body"] = body["body"]
@@ -280,6 +311,7 @@ def test_forgejo_upsert_comment():
 
 
 def test_schemas_maps_results_to_applications(tmp_path, monkeypatch):
+    """kubeconform results map back to Applications; skipped kinds are counted; no binary is a warning."""
     out = tmp_path / "kubeconform-output.json"
     fake = tmp_path / "kubeconform"
     fake.write_text(f"#!/bin/sh\ncat > /dev/null\ncat {out}\n")
@@ -304,6 +336,7 @@ def test_schemas_maps_results_to_applications(tmp_path, monkeypatch):
 
 
 def test_cluster_scoped_kinds(monkeypatch):
+    """Outside a pod, discovery gives None and the built-in list answers."""
     monkeypatch.setattr(kinds, "SA", Path("/nonexistent"))
     monkeypatch.setattr(kinds, "_cache", None)
     assert kinds.discover() is None

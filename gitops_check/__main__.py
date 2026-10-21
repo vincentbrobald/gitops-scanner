@@ -29,6 +29,7 @@ STALE_AFTER = datetime.timedelta(hours=2)
 
 
 def git(repo: Path, *args: str) -> str:
+    """Run git in repo and return its stripped stdout; raises CalledProcessError if it fails."""
     return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
 
 
@@ -38,6 +39,12 @@ def log(msg: str) -> None:
 
 
 def remove_stale(argo: ArgoCD, run: str) -> None:
+    """Delete the preview's Applications that other runs left behind, older than STALE_AFTER.
+
+    An Application whose run label starts with run is this run's and kept; one
+    without a creationTimestamp counts as new. A failed deletion is ignored
+    (the next run tries again); listing errors propagate as ArgoError.
+    """
     now = datetime.datetime.now(datetime.UTC)
     for a in argo.list_apps(RUN_LABEL):
         md = a.get("metadata", {})
@@ -84,6 +91,9 @@ def main(argv: list[str] | None = None) -> int:
     errors: list[str] = []
     warnings: list[str] = []
 
+    # Both revisions are checked out as detached worktrees of repo, so that the
+    # local checks read files at each revision; they are removed in the finally,
+    # as are the Applications created in the preview.
     with tempfile.TemporaryDirectory(prefix="gitops-check-") as tmp:
         trees = {"before": Path(tmp) / "before", "after": Path(tmp) / "after"}
         git(repo, "worktree", "add", "--detach", "-q", str(trees["before"]), base)
@@ -95,6 +105,7 @@ def main(argv: list[str] | None = None) -> int:
             except config.ConfigError as e:
                 print(f"ERROR: {e}", file=sys.stderr)
                 return 2
+            # 'after' is the merge result only when the target's commit is in head.
             if subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", base, head],
                               check=False).returncode:
                 errors.append(f"the pull request is not up to date with its target ({base[:10]}): "
@@ -107,6 +118,7 @@ def main(argv: list[str] | None = None) -> int:
             log(f"rendering before ({base[:10]})")
             rb = Renderer(argo, cfg, f"{run}-b", base)
             renderers.append(rb)
+            # The configuration is head's: entry points the pull request adds don't exist before.
             before = rb.render([e for e in cfg.entrypoints if (trees["before"] / e.path).is_dir()])
             log(f"rendering after ({head[:10]})")
             ra = Renderer(argo, cfg, f"{run}-a", head)
@@ -144,6 +156,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = {"errors": errors, "warnings": warnings, "diffs": diffs, "base": base, "head": head,
             "counts": (len(before.apps), len(after.apps))}
+    # The log and --report get the whole report; the pull request comment is cut to fit.
     full = report.markdown(**args, limit=None)
     print(full)
     if a.report:

@@ -30,12 +30,14 @@ ignore: [{{path: old, reason: kept}}]
 
 @pytest.fixture
 def cfg(tmp_path):
+    """The CONFIG test configuration, loaded from a temporary file."""
     p = tmp_path / ".gitops-check.yaml"
     p.write_text(CONFIG)
     return config.load(p)
 
 
 def app(name, path="x", repo=REPO, rev="main", **spec):
+    """An Application of repo at rev rendering path; spec adds or replaces keys of its spec."""
     return {"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
             "metadata": {"name": name, "namespace": "argocd", "finalizers": ["resources-finalizer.argocd.argoproj.io"]},
             "spec": {"project": "infra", "source": {"repoURL": repo, "targetRevision": rev, "path": path},
@@ -44,12 +46,14 @@ def app(name, path="x", repo=REPO, rev="main", **spec):
 
 
 def test_config(cfg):
+    """Entry point paths lose their slashes; clusters and ignored paths are read."""
     assert cfg.entrypoints[0].path == "clusters/lab/addons"
     assert cfg.server("lab") == "https://kubernetes.default.svc"
     assert cfg.ignore == ["old"]
 
 
 def test_entrypoint_recurse(tmp_path):
+    """recurse: true sets directory.recurse on the stand-in and makes subdirectories count as reached."""
     p = tmp_path / "c.yaml"
     p.write_text(CONFIG.replace("path: clusters/lab/addons/}", "path: clusters/lab/addons/, recurse: true}"))
     c = config.load(p)
@@ -62,6 +66,7 @@ def test_entrypoint_recurse(tmp_path):
 
 
 def test_config_unknown_cluster(tmp_path):
+    """An entry point on an unknown cluster is a ConfigError."""
     p = tmp_path / "c.yaml"
     p.write_text(CONFIG.replace("cluster: lab,", "cluster: nope,"))
     with pytest.raises(config.ConfigError, match="unknown cluster"):
@@ -69,17 +74,20 @@ def test_config_unknown_cluster(tmp_path):
 
 
 def test_same_repo():
+    """Case, a trailing slash and ".git" don't matter; another scheme is another repository."""
     assert config.same_repo(REPO, REPO.upper().removesuffix(".GIT") + "/")
     assert not config.same_repo(REPO, "https://forge.example/org/gitops.git")
 
 
 def test_preview_name():
+    """Long names are cut to 63 characters and stay distinct."""
     assert preview_name("r1", "addons") == "r1-addons"
     long = preview_name("r1", "x" * 80)
     assert len(long) <= 63 and long != preview_name("r1", "x" * 79 + "y")
 
 
 def test_rewrite_app(cfg):
+    """The copy gets a run name and labels, no sync policy, project default and the pinned revision."""
     a = rewrite_app(app("web", rev="main"), run="r1", cfg=cfg, revision="abc", namespace="prev")
     assert a["metadata"] == {"name": "r1-web", "namespace": "prev", "labels": {RUN_LABEL: "r1", ORIGIN_LABEL: "web"}}
     assert "syncPolicy" not in a["spec"] and a["spec"]["project"] == "default"
@@ -89,11 +97,13 @@ def test_rewrite_app(cfg):
 @pytest.mark.parametrize("repo,rev,pinned", [(REPO, "HEAD", True), (REPO, "v1.2", False),
                                             ("https://charts.example", "main", False)])
 def test_rewrite_app_pins_tracked_sources_only(cfg, repo, rev, pinned):
+    """Only sources on this repository tracking a tracked branch are pinned."""
     a = rewrite_app(app("web", repo=repo, rev=rev), run="r", cfg=cfg, revision="abc", namespace="p")
     assert (a["spec"]["source"]["targetRevision"] == "abc") is pinned
 
 
 def test_rewrite_app_multi_source(cfg):
+    """Each source of a multi-source Application is pinned on its own merits."""
     src = app("web")
     src["spec"].pop("source")
     src["spec"]["sources"] = [{"repoURL": "https://charts.example", "chart": "c", "targetRevision": "1.0"},
@@ -103,6 +113,7 @@ def test_rewrite_app_multi_source(cfg):
 
 
 def test_rewrite_appset_nested_generators(cfg):
+    """Git generators nested in a matrix are pinned, in a copy (the original is unchanged)."""
     s = {"metadata": {"name": "set", "namespace": "argocd"}, "spec": {"generators": [
         {"matrix": {"generators": [{"clusters": {}}, {"git": {"repoURL": REPO, "revision": "main"}}]}},
         {"git": {"repoURL": REPO, "revision": "v1"}}]}}
@@ -118,25 +129,31 @@ class FakeArgo:
     namespace = "prev"
 
     def __init__(self, tree, appsets=None):
+        """tree: source path -> resources; appsets: ApplicationSet name -> the Applications it generates."""
         self.tree, self.appsets, self.apps, self.deleted = tree, appsets or {}, {}, []
 
     def create_app(self, a):
+        """Store a, or raise ArgoError as Argo CD's validation would for the path 'broken'."""
         if a["spec"]["source"]["path"] == "broken":
             raise ArgoError("InvalidSpecError: Unable to generate manifests in broken")
         self.apps[a["metadata"]["name"]] = a
 
     def manifests(self, name):
+        """The resources of the stored Application's source path."""
         return self.tree[self.apps[name]["spec"]["source"]["path"]]
 
     def delete_app(self, name):
+        """Record the deletion (the Application stays stored, for the assertions)."""
         self.deleted.append(name)
 
     def generate(self, s):
+        """Remember the ApplicationSet sent and return a copy of what it generates."""
         self.generated = s
         return copy.deepcopy(self.appsets[s["metadata"]["name"]])
 
 
 def test_render_follows_apps_and_appsets(cfg):
+    """The walk renders child Applications and generated ones, restores projects and cleans up."""
     cm = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "c", "namespace": "n"}}
     tree = {"clusters/lab/addons": [app("addons", "clusters/lab/addons"), app("web", "web"),
                                     {"apiVersion": "argoproj.io/v1alpha1", "kind": "ApplicationSet",
@@ -159,6 +176,7 @@ def test_render_follows_apps_and_appsets(cfg):
 
 
 def test_render_records_errors(cfg):
+    """A render failure and an empty ApplicationSet are recorded, not raised."""
     tree = {"clusters/lab/addons": [app("bad", "broken"),
                                     {"apiVersion": "argoproj.io/v1alpha1", "kind": "ApplicationSet",
                                      "metadata": {"name": "empty"}, "spec": {}}]}
@@ -171,6 +189,7 @@ def test_render_records_errors(cfg):
 
 
 def rendering(**apps):
+    """A Rendering with one App per keyword argument: name=(spec, resources)."""
     r = Rendering("abc")
     for name, (spec, resources) in apps.items():
         r.apps[name] = App(name, "lab", None, {"spec": spec}, resources)
@@ -178,18 +197,21 @@ def rendering(**apps):
 
 
 def secret(name, annotations=None, data=None):
+    """A Secret in namespace n with the given annotations and data (default one masked value)."""
     return {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": name, "namespace": "n",
                                                               "annotations": annotations or {}},
             "data": data if data is not None else {"k": "++++++++"}}
 
 
 def test_duplicates():
+    """A resource rendered by two Applications is an error."""
     cm = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "c", "namespace": "n"}}
     errors, _ = checks.duplicates(rendering(a=({}, [cm]), b=({}, [cm])))
     assert errors == ["ConfigMap n/c is rendered by both a and b"]
 
 
 def test_plaintext_secrets(cfg, tmp_path):
+    """Secrets in clear and secretGenerators are errors, except encrypted, empty, harmless Argo CD and ignored ones."""
     files = {
         "a/clear.yaml": "kind: Secret\nmetadata: {name: clear}\nstringData: {k: v}\n",
         "a/sops.enc.yaml": "kind: Secret\nmetadata: {name: enc}\nstringData: {k: ENC[x]}\nsops: {mac: m}\n",
@@ -212,6 +234,7 @@ def test_plaintext_secrets(cfg, tmp_path):
 
 
 def test_duplicates_namespace_from_destination():
+    """Namespaced resources take their Application's namespace; cluster-scoped ones collide."""
     svc = {"apiVersion": "v1", "kind": "Service", "metadata": {"name": "web"}}
     ns = {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "shared"}}
     r = rendering(a=({"destination": {"namespace": "one"}}, [svc, ns]),
@@ -221,6 +244,7 @@ def test_duplicates_namespace_from_destination():
 
 
 def test_unreached(cfg, tmp_path):
+    """Only directories that no entry point, Application, generator or ignore reaches are errors."""
     t = tmp_path / "repo"
     for f in ["clusters/lab/addons/app.yaml", "clusters/lab/web/kustomization.yaml", "base/web/deploy.yaml",
               "orphan/x.yaml", "old/y.yaml", "samples/apps/a/k.yaml", "rec/sub/z.yaml", ".tekton/ci.yaml",
@@ -239,6 +263,7 @@ def test_unreached(cfg, tmp_path):
 
 
 def test_generated_edits(tmp_path):
+    """Only changed files carrying the generated mark are warned about."""
     (tmp_path / "gen.yaml").write_text(checks.GENERATED_MARK + " from the cluster file\nkind: X\n")
     (tmp_path / "hand.yaml").write_text("kind: X\n")
     _, warnings = checks.generated_edits(tmp_path, ["gen.yaml", "hand.yaml", "gone.yaml"])
@@ -246,6 +271,7 @@ def test_generated_edits(tmp_path):
 
 
 def test_projects(cfg):
+    """Sources, destinations, kinds and namespaces outside the AppProject, and unknown projects, are errors."""
     proj = {"apiVersion": "argoproj.io/v1alpha1", "kind": "AppProject", "metadata": {"name": "svc", "namespace": "argocd"},
             "spec": {"sourceRepos": [REPO], "clusterResourceWhitelist": [{"group": "", "kind": "Namespace"}],
                      "destinations": [{"server": "*", "namespace": "*"}, {"server": "*", "namespace": "!kube-*"}],
@@ -278,6 +304,7 @@ def test_projects(cfg):
 
 
 def test_compare():
+    """Tracking-id changes are noise; scaled, removed and added Applications are reported."""
     dep = {"apiVersion": "apps/v1", "kind": "Deployment",
            "metadata": {"name": "d", "namespace": "n", "annotations": {"argocd.argoproj.io/tracking-id": "x"}},
            "spec": {"replicas": 1}}
@@ -292,6 +319,7 @@ def test_compare():
 
 
 def test_secret_keys_compared_not_values():
+    """Secrets differ by their fingerprints annotation, never by the masked values."""
     a = secret("s", {diff.FINGERPRINTS: "k: 1\n"})
     b = secret("s", {diff.FINGERPRINTS: "k: 2\n"})
     d = diff.compare(rendering(x=({}, [a])), rendering(x=({}, [b])))
@@ -299,6 +327,7 @@ def test_secret_keys_compared_not_values():
 
 
 def test_report_truncates():
+    """With a limit, the details that don't fit are left out with a note."""
     big = diff.AppDiff("a", "changed", changed={"r": "+x\n" * 5000})
     text = report.markdown(errors=["e"], warnings=[], diffs=[big, big], base="b" * 40, head="h" * 40,
                            counts=(1, 1), limit=12000)
@@ -306,17 +335,20 @@ def test_report_truncates():
 
 
 def test_token_from_git_credentials(tmp_path):
+    """The token is the URL's password, percent-decoded."""
     p = tmp_path / ".git-credentials"
     p.write_text("https://git:s3cr%40t@forge.example\n")
     assert token_from_git_credentials(p) == "s3cr@t"
 
 
 def test_normalize_secret_without_values():
+    """A Secret with data: null normalizes to empty data."""
     s = {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "s"}, "data": None}
     assert diff.normalize(s)["data"] == {}
 
 
 def test_helm_tests_dropped():
+    """Helm hooks of type test are recognised, also in a list of hooks."""
     from gitops_check.render import is_helm_test
     assert is_helm_test({"metadata": {"annotations": {"helm.sh/hook": "test-success"}}})
     assert is_helm_test({"metadata": {"annotations": {"helm.sh/hook": "pre-install, test"}}})
@@ -324,6 +356,7 @@ def test_helm_tests_dropped():
 
 
 def test_compare_failed_render():
+    """An Application that fails after is "failed", without details in the report."""
     dep = {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "d", "namespace": "n"}}
     after = rendering(x=({}, []))
     after.apps["x"].error = "InvalidSpecError"
@@ -334,6 +367,7 @@ def test_compare_failed_render():
 
 
 def test_report_without_limit_keeps_every_diff():
+    """limit=None keeps every Application's details."""
     big = diff.AppDiff("a", "changed", changed={"r": "+x\n" * 5000})
     text = report.markdown(errors=[], warnings=[], diffs=[big, big], base="b" * 40, head="h" * 40,
                            counts=(1, 1), limit=None)
@@ -341,6 +375,7 @@ def test_report_without_limit_keeps_every_diff():
 
 
 def test_git_generator_globs_templated(cfg):
+    """Templated paths become globs; excluded paths are left out."""
     appsets = [{"spec": {"generators": [{"matrix": {"generators": [
         {"git": {"repoURL": REPO, "files": [{"path": "applications/*/organization.yaml"}]}},
         {"git": {"repoURL": REPO, "files": [{"path": "applications/{{ .org.path.basename }}/*/team.yaml"}],
@@ -351,6 +386,7 @@ def test_git_generator_globs_templated(cfg):
 
 
 def test_render_same_name_other_namespaces_and_external(tmp_path):
+    """Same-named Applications in other namespaces get distinct keys; external ones aren't rendered."""
     p = tmp_path / ".gitops-check.yaml"
     p.write_text(CONFIG + "external: [{prefix: 'ssh://git@forge.example:2222/tenants/', reason: tenants}]\n")
     c = config.load(p)

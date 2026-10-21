@@ -19,12 +19,15 @@ from .argocd import ArgoCD, ArgoError
 from .config import Config, Entrypoint, same_repo
 
 RUN_LABEL = "gitops-check/run"        # on every submitted Application: <run>-b / <run>-a
-ORIGIN_LABEL = "gitops-check/app"
+ORIGIN_LABEL = "gitops-check/app"     # the original name, cut to 63 characters (a label value's limit)
 HELM_HOOK = "helm.sh/hook"
+# Applications one revision may render at most, a guard against cycles.
 MAX_APPS = 500
 
 
 def app_key(app: dict, home: tuple[str, ...] = ("argocd",)) -> str:
+    """An Application's key: its name, prefixed with "<namespace>/" unless its
+    namespace is one of home (no namespace counts as "argocd")."""
     md = app.get("metadata") or {}
     ns, name = md.get("namespace") or "argocd", md.get("name", "")
     return name if ns in home else f"{ns}/{name}"
@@ -32,6 +35,7 @@ def app_key(app: dict, home: tuple[str, ...] = ("argocd",)) -> str:
 
 @dataclasses.dataclass
 class App:
+    """One Application of a rendering and what it rendered to."""
     name: str                        # key: [namespace/]name
     entrypoint: str
     parent: str | None               # original name of the Application that rendered it; None: a stand-in
@@ -44,6 +48,7 @@ class App:
 
 @dataclasses.dataclass
 class Rendering:
+    """What one revision renders to: its Applications by key, plus the errors and warnings of the walk."""
     revision: str
     apps: dict[str, App] = dataclasses.field(default_factory=dict)
     errors: list[str] = dataclasses.field(default_factory=list)     # not tied to one app (ApplicationSets)
@@ -61,6 +66,7 @@ def is_helm_test(r: dict) -> bool:
 def preview_name(run: str, original: str) -> str:
     """A DNS-safe, run-specific name; long names keep a hash for uniqueness."""
     name = f"{run}-{original}"
+    # Cut to 54 characters, then "-" and 8 hex of the original name's sha256: 63 in all.
     if len(name) > 63:
         h = hashlib.sha256(original.encode()).hexdigest()[:8]
         name = f"{name[:54]}-{h}"
@@ -68,16 +74,23 @@ def preview_name(run: str, original: str) -> str:
 
 
 def _project(app: dict) -> str:
+    """The Application's project as written, "default" when unset."""
     return (app.get("spec") or {}).get("project") or "default"
 
 
 def _sources(spec: dict) -> list[dict]:
+    """The sources of an Application spec: spec.sources, else [spec.source], else [].
+
+    The dicts are the spec's own, so changing them changes the spec.
+    """
     if spec.get("sources"):
         return spec["sources"]
     return [spec["source"]] if spec.get("source") else []
 
 
 def pin_revision(source: dict, cfg: Config, revision: str) -> bool:
+    """Set source's targetRevision to revision, in place, when it is on this repository
+    and tracks one of trackedRevisions (no targetRevision means HEAD); return whether it did."""
     if same_repo(source.get("repoURL", ""), cfg.repo_url) and \
             (source.get("targetRevision") or "HEAD") in cfg.tracked_revisions:
         source["targetRevision"] = revision
@@ -86,6 +99,11 @@ def pin_revision(source: dict, cfg: Config, revision: str) -> bool:
 
 
 def rewrite_app(app: dict, *, run: str, cfg: Config, revision: str, namespace: str) -> dict:
+    """A copy of app to submit to the preview, as the module docstring describes; app is left unchanged.
+
+    The new name is preview_name() of its key, "/" replaced with "-", and its
+    metadata keeps only the name, namespace and the two labels (finalizers go).
+    """
     a = copy.deepcopy(app)
     original = a["metadata"]["name"]
     a["metadata"] = {"name": preview_name(run, app_key(app, ("argocd", namespace)).replace("/", "-")), "namespace": namespace,
@@ -101,6 +119,8 @@ def rewrite_app(app: dict, *, run: str, cfg: Config, revision: str, namespace: s
 
 
 def _walk_generators(gens: list[dict], cfg: Config, revision: str) -> None:
+    """Pin, in place, the git generators on this repository that track a branch of
+    trackedRevisions to revision, recursing into matrix and merge generators."""
     for g in gens or []:
         if "git" in g:
             git = g["git"]
@@ -128,6 +148,8 @@ def rewrite_appset(appset: dict, *, cfg: Config, revision: str, namespace: str) 
 
 
 def entry_app(entry: Entrypoint, cfg: Config) -> dict:
+    """The stand-in Application "entrypoint-<name>" that renders an entry point's directory,
+    as the root Application syncing it would (recursively with recurse)."""
     source = {"repoURL": cfg.repo_url, "targetRevision": cfg.tracked_revisions[0], "path": entry.path}
     if entry.recurse:
         source["directory"] = {"recurse": True}
@@ -144,6 +166,10 @@ class Renderer:
     finally: a run that dies leaves them for remove_stale in __main__)."""
 
     def __init__(self, argo: ArgoCD, cfg: Config, run: str, revision: str):
+        """run prefixes the preview names (and is their run label); revision is the commit to render.
+
+        home: the namespaces whose Applications are keyed by name alone.
+        """
         self.argo, self.cfg, self.run, self.revision = argo, cfg, run, revision
         self.created: list[str] = []
         self.home = ("argocd", argo.namespace)
@@ -154,9 +180,15 @@ class Renderer:
         return what this revision renders to. Argo CD errors are recorded in
         the result, never raised: one broken Application doesn't stop the walk."""
         out = Rendering(self.revision)
+        # ApplicationSets already generated, by key, across all entry points.
         generated: set[str] = set()
         for entry in entrypoints if entrypoints is not None else self.cfg.entrypoints:
             synthetic = entry_app(entry, self.cfg)
+            # Breadth-first walk: each rendered Application queues the Applications
+            # it renders and those its ApplicationSets generate, with its key as
+            # their parent. An Application already rendered (by key) is skipped,
+            # so one reached twice or from two entry points is rendered once.
+            # Reaching MAX_APPS ends this entry point's walk with an error.
             queue: list[tuple[dict, str | None]] = [(synthetic, None)]
             while queue:
                 if len(out.apps) >= MAX_APPS:
@@ -179,21 +211,30 @@ class Renderer:
                         if set_name not in generated:
                             generated.add(set_name)
                             queue.extend((a, name) for a in self._generate(r, name, out))
+            # Drop the stand-in when a real Application renders the same path:
+            # its resources are then that Application's, not a duplicate's.
             sname = synthetic["metadata"]["name"]
             if any(a.name != sname and self._covers(a, entry.path) for a in out.apps.values()):
                 out.apps.pop(sname, None)
         return out
 
     def _external(self, app: dict) -> bool:
+        """Whether every source of app is on a repository under an `external` prefix (case-insensitive)."""
         srcs = _sources(app.get("spec", {}))
         return bool(srcs) and bool(self.cfg.external) and all(
             (s.get("repoURL") or "").strip().lower().startswith(tuple(self.cfg.external)) for s in srcs)
 
     def _covers(self, app: App, path: str) -> bool:
+        """Whether app has a source on this repository at path."""
         return any(same_repo(s.get("repoURL", ""), self.cfg.repo_url) and (s.get("path") or "").strip("/") == path
                    for s in _sources(app.spec.get("spec", {})))
 
     def _render_app(self, app: dict, entry: str, parent: str | None) -> App:
+        """Submit a rewritten copy of app to the preview and return it with its resources
+        (Helm tests left out), or with the error when Argo CD refuses or fails to render it.
+
+        The copy is remembered for cleanup() once created.
+        """
         original = app_key(app, self.home)
         spec = rewrite_app(app, run=self.run, cfg=self.cfg, revision=self.revision, namespace=self.argo.namespace)
         a = App(original, entry, parent, spec, project=_project(app))
@@ -206,6 +247,12 @@ class Renderer:
         return a
 
     def _generate(self, appset: dict, parent: str, out: Rendering) -> list[dict]:
+        """The Applications appset generates, from the preview's generate API.
+
+        Records appset in out.appsets, and in out.errors / out.warnings a failure
+        or an empty result. The template's project, sent as 'default', is put
+        back on the generated Applications unless it is templated ("{{").
+        """
         name = appset.get("metadata", {}).get("name", "?")
         out.appsets.append(appset)
         try:

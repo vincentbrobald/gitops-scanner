@@ -11,6 +11,7 @@ import sysconfig
 from pathlib import Path
 
 dest = Path(sys.argv[1])
+# dist.files are the files its metadata lists; locate() gives each one's installed path.
 for dist in md.distributions():
     name = dist.metadata["Name"]
     if name in ("pip", "gitops-check"):       # pip is removed; ours is /licenses/gitops-scanner
