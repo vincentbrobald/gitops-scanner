@@ -10,7 +10,7 @@
 # packages without fixes (util-linux, expat, curl...); Alpine has far fewer
 # packages and fixes them quickly.
 ARG BASE=docker.io/library/python:3.14.7-alpine3.24
-ARG GO_BASE=docker.io/library/golang:1.26.9-trixie
+ARG GO_BASE=docker.io/library/golang:1.26.10-trixie
 ARG GO_LICENSES=github.com/google/go-licenses/v2@v2.0.1
 
 # kubeconform validates the rendered resources. Built from its release's
