@@ -14,5 +14,7 @@ GitHub therefore can't be merged as is.
 - **Security issues**: please don't open a public issue; use GitHub's
   private vulnerability reporting (the repository's Security tab).
 
+Notable changes are listed in CHANGELOG.md.
+
 By contributing you agree that your contribution is licensed under the
 repository's license (LICENSE).

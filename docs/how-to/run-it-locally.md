@@ -9,9 +9,13 @@ holding both revisions, is needed; nothing is pushed or fetched from Forgejo
 (charts still come from their repositories):
 
 ```sh
-podman run --rm -v ../gitops:/repo:Z docker.io/vincentbrobald/gitops-scanner:latest \
+podman run --rm -v ../gitops:/repo:Z -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0='*' \
+    docker.io/vincentbrobald/gitops-scanner:latest \
     --repo /repo --base origin/main --head my-branch --no-schemas
 ```
+
+The image runs as uid 65532: the `GIT_CONFIG_*` variables tell its git to
+accept a clone another user owns (otherwise "detected dubious ownership").
 
 Outside a pod, Helm sees its default Kubernetes version and no cluster API
 versions, and the cluster-scoped kinds are the built-in list's: a chart
@@ -30,4 +34,4 @@ python -m gitops_check --repo ../gitops --base origin/main --head origin/my-bran
 ```
 
 Or the preview with the image: `podman run --rm --network host -e ARGOCD_TOKEN -v ../gitops:/repo:Z
-docker.io/vincentbrobald/gitops-scanner:latest --repo /repo --base ... --head ...`.
+-e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0='*' docker.io/vincentbrobald/gitops-scanner:latest --repo /repo --base ... --head ...`.

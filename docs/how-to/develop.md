@@ -31,6 +31,9 @@ pip install -r requirements-test.txt && ruff check . && python -m pytest --cov
 
   The image build runs the same, so a failing Go test fails the build.
 - Coverage must stay at or above `fail_under` in `pyproject.toml` (85%).
+- **A notable change** (behaviour, options, configuration, the image's
+  contents) adds a line under `Unreleased` in `CHANGELOG.md`; the section
+  is headed by its merge's time, `YYYY-MM-DD HH:MM UTC`.
 - **Adding a check**: a function in `checks.py` returning `(errors, warnings)`,
   called in `__main__.main`, with a test; document it in
   [Checks](../reference/checks.md) and in `checks.py`'s docstring.
@@ -38,7 +41,7 @@ pip install -r requirements-test.txt && ruff check . && python -m pytest --cov
 `.tekton/build.yaml` runs the same on every pull request and push (tools pinned
 in `requirements-test.txt`), builds the image with kaniko (its last step runs
 the image's entry point and tools: a smoke test), scans it with Trivy (fails on
-fixable HIGH/CRITICAL; the image is Python on Alpine plus git, kubeconform, sops and ssh-keygen (the last two for the gitops repository's generators),
+fixable HIGH/CRITICAL; the image is Python on Alpine plus git, argocd-render, kustomize, helm, kubeconform, sops and ssh-keygen (the last two for the gitops repository's generators),
 where Debian's slim base carried unfixed ones),
 and on `main` pushes `gitops-scanner/gitops-check:<commit>`
 and `:latest` to the site's registry. The gitops repository's pipeline runs
@@ -50,7 +53,7 @@ repository's how-to [Build and host the images
 yourself](https://github.com/vincentbrobald/gitops/blob/main/docs/how-to/build-and-host-the-images.md).
 
 The image carries the licenses of what it contains under `/licenses`: this
-repository's, kubeconform's and sops' with their dependencies' (go-licenses,
+repository's, argocd-render's, kustomize's, helm's, kubeconform's and sops' with their dependencies' (go-licenses,
 in their build stages; the source of MPL-2.0 modules too), the Python
 packages' license files (`image/python-licenses.py`) and the list of the
 Alpine packages with their licenses (`apk list --installed`). Its labels

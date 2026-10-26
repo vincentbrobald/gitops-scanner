@@ -15,8 +15,8 @@ pull request ──webhook──> Pipelines-as-Code ──> PipelineRun (gitops-
                               or, with --server, argocd-preview: a render-only Argo CD
 ```
 
-The rendering is Argo CD's own (same version as the clusters', same bundled
-kustomize and Helm): nothing here templates a chart or builds a kustomization.
+The rendering is Argo CD's own (same version as the clusters', same versions
+of kustomize and Helm): nothing here templates a chart or builds a kustomization.
 gitops-check decides what to submit, in which form, follows what comes back,
 and judges the result.
 

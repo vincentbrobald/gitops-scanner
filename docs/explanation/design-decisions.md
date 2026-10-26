@@ -31,12 +31,14 @@ and run in the check's own pod. This repository is fetched from the local
 clone; charts from their repositories.
 **Why.** No preview to run, no token, nothing left behind by a dead run, and
 pull requests render from the clone. The code that renders is still Argo
-CD's, at the clusters' version, with its kustomize and helm.
+CD's, at the clusters' version, with its versions of kustomize and helm.
 **Cost.** What the API server and the preview's settings supplied is now
 assembled here: `argocd-cm` settings (`argocd.cm`), the clusters
 (`clusters[]`), Helm's `.Capabilities` (discovered from the pod's cluster).
 The helper uses Argo CD's internal packages, which change between versions:
-an Argo CD upgrade is a rebuild, sometimes a code change. Only the list,
+an Argo CD upgrade is a rebuild (the Containerfile's `ARGOCD_VERSION` and
+`ARGOCD_COMMIT`, and `HELM_VERSION` and `KUSTOMIZE_VERSION` from its
+`hack/tool-versions.sh`), sometimes a code change. Only the list,
 clusters, git, matrix and merge generators work (no SCM provider, pull
 request, plugin or duck-type generator).
 **Alternatives.** The preview (`--server`, below), kept until both have

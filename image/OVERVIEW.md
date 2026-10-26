@@ -2,8 +2,8 @@
 
 `gitops-check`: the merge checks of a GitOps repository deployed by
 [Argo CD](https://argo-cd.readthedocs.io/). Each pull request is rendered
-**before** (its target branch) and **after** (its head) by a render-only
-Argo CD, the output is checked, and the per-resource differences are posted
+**before** (its target branch) and **after** (its head) with Argo CD's own
+rendering code, run in process (argocd-render), the output is checked, and the per-resource differences are posted
 on the pull request. Any error fails the commit status, which the
 repository can require to merge.
 
@@ -14,6 +14,9 @@ clusters'): gitops-check decides what to submit, follows what comes back
 ## What this image is
 
 The `gitops-check` command (Python) with the tools it calls:
+argocd-render (Argo CD's manifest generation and ApplicationSet generators,
+built from Argo CD's source), Argo CD's versions of
+[kustomize](https://kustomize.io/) and [Helm](https://helm.sh/),
 [kubeconform](https://github.com/yannh/kubeconform) (schema validation),
 [sops](https://github.com/getsops/sops) (encrypting generated Secrets with
 public age keys only), git and ssh-keygen. Alpine based, runs as a non-root
@@ -23,14 +26,17 @@ are under `/licenses`.
 ## Use
 
 In a CI pipeline (e.g. Pipelines-as-Code on Tekton), on each pull request,
-against a render-only Argo CD:
+from a clone holding both revisions:
 
 ```sh
-docker run --rm -e ARGOCD_TOKEN -v "$PWD":/repo docker.io/vincentbrobald/gitops-scanner:latest \
-  --repo /repo --base origin/main --head HEAD --server https://argocd-preview.example.org --report report.md
+docker run --rm -v "$PWD":/repo -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0='*' \
+  docker.io/vincentbrobald/gitops-scanner:latest \
+  --repo /repo --base origin/main --head HEAD --report report.md
 ```
 
-What the render-only Argo CD must provide, the checks, the configuration
+Run in a pod, it gives Helm the cluster's version and API versions. With
+`--server` (token: `$ARGOCD_TOKEN`), a render-only Argo CD renders instead.
+What that Argo CD must provide, the checks, the configuration
 (`.gitops-check.yaml`) and every option:
 [documentation](https://github.com/vincentbrobald/gitops-scanner#documentation).
 

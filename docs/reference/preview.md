@@ -2,7 +2,9 @@
 
 > Reference · [Documentation](../../README.md#documentation)
 
-What the render-only Argo CD must provide.
+What the render-only Argo CD must provide, for `--server`. The gitops
+repository's merge check no longer uses it: it renders in process with
+argocd-render.
 
 `argocd-preview` (gitops: [`clusters/lab/addons/argocd-preview.yaml`](https://github.com/vincentbrobald/gitops/blob/main/clusters/lab/addons/argocd-preview.yaml), [`base/argocd-preview/`](https://github.com/vincentbrobald/gitops/blob/main/base/argocd-preview)):
 
