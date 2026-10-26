@@ -237,11 +237,10 @@ def unreached(r: Rendering, cfg: Config, tree: Path, git_globs: list[str]) -> tu
     return errors, []
 
 
-def git_generator_globs(r: Rendering, cfg: Config, appsets: list[dict]) -> list[str]:
+def git_generator_globs(cfg: Config, appsets: list[dict]) -> list[str]:
     """The paths the git generators of appsets on this repository read, as globs.
 
     Template expressions ("{{ ... }}") become "*"; excluded paths are left out.
-    r is not used.
     """
     globs = []
 

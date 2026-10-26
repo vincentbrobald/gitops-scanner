@@ -1,8 +1,11 @@
+"""Unit tests: configuration, rewriting, the walk against an in-memory Argo CD, the checks, the diff, the report."""
 import copy
+import datetime
 
 import pytest
 
-from gitops_check import checks, config, diff, render, report
+from gitops_check import __main__ as cli
+from gitops_check import checks, config, diff, kinds, render, report
 from gitops_check.argocd import ArgoError
 from gitops_check.forgejo import token_from_git_credentials
 from gitops_check.render import (
@@ -381,7 +384,7 @@ def test_git_generator_globs_templated(cfg):
         {"git": {"repoURL": REPO, "files": [{"path": "applications/{{ .org.path.basename }}/*/team.yaml"}],
                  "directories": [{"path": "x/*", "exclude": True}]}},
     ]}}]}}]
-    assert checks.git_generator_globs(None, cfg, appsets) == [
+    assert checks.git_generator_globs(cfg, appsets) == [
         "applications/*/organization.yaml", "applications/*/*/team.yaml"]
 
 
@@ -428,3 +431,65 @@ def test_render_stops_once_at_max_apps(cfg, monkeypatch):
             "more": [app("d", "p")], "p": []}
     out = Renderer(FakeArgo(tree), cfg, "r", "abc").render()
     assert out.errors == ["more than 2 Applications: stopped (a cycle?)"]
+
+
+@pytest.mark.parametrize("text,match", [("kind: [", "test.yaml"), ("kind: Other\n", "not a CheckConfig"),
+                                        ("kind: CheckConfig\nentrypoints: []\n", "missing or invalid key")])
+def test_config_errors(tmp_path, text, match):
+    """Bad YAML, another kind and a missing key are ConfigErrors."""
+    p = tmp_path / "test.yaml"
+    p.write_text(text)
+    with pytest.raises(config.ConfigError, match=match):
+        config.load(p)
+
+
+def test_token_from_git_credentials_without_token(tmp_path):
+    """A credentials file without a password is a ValueError."""
+    p = tmp_path / ".git-credentials"
+    p.write_text("https://forge.example\n")
+    with pytest.raises(ValueError, match="no token"):
+        token_from_git_credentials(p)
+
+
+def test_remove_stale():
+    """Only other runs' Applications older than STALE_AFTER are deleted; a failed deletion is ignored."""
+    old = (datetime.datetime.now(datetime.UTC) - cli.STALE_AFTER * 2).isoformat()
+
+    def a(name, run, created=None):
+        """A listed Application of run, created at created (none: no timestamp)."""
+        md = {"name": name, "labels": {RUN_LABEL: run}}
+        return {"metadata": md | ({"creationTimestamp": created} if created else {})}
+
+    deleted = []
+
+    class Argo:
+        """Lists the Applications below; deleting "stuck" fails."""
+
+        def list_apps(self, selector):
+            """Every Application, whatever the selector."""
+            return [a("mine", "r1-b", old), a("fresh", "r0-a"), a("stale", "r0-a", old), a("stuck", "r0-b", old)]
+
+        def delete_app(self, name):
+            """Record name, or fail for "stuck"."""
+            if name == "stuck":
+                raise ArgoError("forbidden")
+            deleted.append(name)
+
+    cli.remove_stale(Argo(), "r1")
+    assert deleted == ["stale"]
+
+
+def test_discover(tmp_path, monkeypatch):
+    """Discovery keeps the cluster-scoped kinds of every group, without subresources."""
+    (tmp_path / "token").write_text("tok\n")
+    monkeypatch.setattr(kinds, "SA", tmp_path)
+    monkeypatch.setattr(kinds.ssl, "create_default_context", lambda **kw: None)
+    api = {"/apis": {"groups": [{"preferredVersion": {"groupVersion": "example.io/v1"}}]},
+           "/api/v1": {"resources": [{"name": "namespaces", "kind": "Namespace", "namespaced": False},
+                                     {"name": "namespaces/status", "kind": "Status", "namespaced": False},
+                                     {"name": "pods", "kind": "Pod", "namespaced": True}]},
+           "/apis/example.io/v1": {"resources": [{"name": "widgets", "kind": "Widget", "namespaced": False}]}}
+    monkeypatch.setattr(kinds, "_get", lambda path, token, ctx: api[path])
+    assert kinds.discover() == {("", "Namespace"), ("example.io", "Widget")}
+    del api["/apis"]
+    assert kinds.discover() is None

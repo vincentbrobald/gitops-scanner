@@ -58,7 +58,16 @@ def remove_stale(argo: ArgoCD, run: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """The command line (see the module docstring); returns the exit status."""
+    """The command line (see the module docstring); returns the exit status.
+
+    1. Resolve --base and --head to commits and check both out as worktrees.
+    2. Read the configuration at head; an error if head doesn't contain base (outdated pull request).
+    3. Delete stale Applications of dead runs (remove_stale).
+    4. Render before (entry points that exist at base) and after (all of them).
+    5. Run the checks on 'after' and diff the two renderings.
+    6. Delete this run's Applications and the worktrees, whatever happened.
+    7. Print the report; write it to --report and post it on the pull request when asked.
+    """
     p = argparse.ArgumentParser(prog="gitops-check", description=__doc__.split("\n\n")[0])
     p.add_argument("--repo", type=Path, default=Path("."), help="clone holding both revisions")
     p.add_argument("--base", required=True, help="target branch's commit (before)")
@@ -133,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
             results = [checks.render_errors(after), checks.duplicates(after),
                        checks.plaintext_secrets(trees["after"], cfg),
                        checks.unreached(after, cfg, trees["after"],
-                                        checks.git_generator_globs(after, cfg, after.appsets)),
+                                        checks.git_generator_globs(cfg, after.appsets)),
                        checks.generated_edits(trees["after"], changed),
                        checks.projects(after, cfg)]
             if not a.no_schemas:

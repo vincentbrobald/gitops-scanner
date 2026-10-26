@@ -1,3 +1,5 @@
+"""Whole runs of gitops-check against real git repositories and a fake Argo CD HTTP server;
+the Argo CD and Forgejo clients over HTTP; kubeconform results mapped back to Applications."""
 from __future__ import annotations
 
 import json
@@ -78,8 +80,7 @@ class FakeArgo(BaseHTTPRequestHandler):
     calls: list
 
     def log_message(self, *a):
-        # Silence the request log.
-        pass
+        """Silence BaseHTTPRequestHandler's per-request log on stderr."""
 
     def _send(self, code: int, body: dict | None = None):
         """Answer with status code and body as JSON ({} when None)."""
@@ -270,8 +271,7 @@ def test_forgejo_upsert_comment():
         """Forgejo's comment API on the list comments."""
 
         def log_message(self, *a):
-            # Silence the request log.
-            pass
+            """Silence BaseHTTPRequestHandler's per-request log on stderr."""
 
         def _send(self, body):
             """Answer 200 with body as JSON."""
