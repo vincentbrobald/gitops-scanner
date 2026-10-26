@@ -16,7 +16,7 @@ def markdown(*, errors: list[str], warnings: list[str], diffs: list[AppDiff], ba
     ok = not errors
     head_line = "✅ **gitops-check passed**" if ok else f"❌ **gitops-check failed: {len(errors)} error(s)**"
     summary = (f"Rendered `{base[:10]}` (before, {counts[0]} Applications) and `{head[:10]}` "
-               f"(after, {counts[1]} Applications) with the render-only Argo CD.")
+               f"(after, {counts[1]} Applications) with Argo CD.")
     out = [MARKER, head_line, "", summary, ""]
     if errors:
         out += ["### Errors (block the merge)", ""] + [f"- {e}" for e in errors] + [""]

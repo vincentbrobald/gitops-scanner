@@ -2,7 +2,7 @@
 
 `gitops-check`: the merge-request checks of a GitOps repository deployed
 by Argo CD. A pull request is rendered **before** (its target
-branch) and **after** (its head) by a render-only Argo CD, the output is
+branch) and **after** (its head) by Argo CD's own code, the output is
 checked, and the per-resource differences are reported on the pull request.
 Any error fails the commit status, which the repository requires to merge.
 
@@ -10,8 +10,9 @@ Any error fails the commit status, which the repository requires to merge.
 pull request ──webhook──> Pipelines-as-Code ──> PipelineRun (gitops-ci namespace, this image)
                                                   │ Applications, ApplicationSets (rewritten)
                                                   v
-                              argocd-preview: Argo CD API server + repo-server only
-                              (no controller: renders, never syncs; ksops stand-in: never decrypts)
+                              argocd-render: Argo CD's repo-server and ApplicationSet code,
+                              in process (renders, can't sync; ksops stand-in: never decrypts)
+                              or, with --server, argocd-preview: a render-only Argo CD
 ```
 
 The rendering is Argo CD's own (same version as the clusters', same bundled
@@ -35,7 +36,7 @@ check at work on a pull request: the gitops repository's tutorial
 - [Checks](docs/reference/checks.md): what blocks, what is only reported, the diff
 - [Configuration](docs/reference/configuration.md): `.gitops-check.yaml`
 - [Command line](docs/reference/command-line.md): options, environment, exit status
-- [The preview](docs/reference/preview.md): what the render-only Argo CD must provide
+- [The preview](docs/reference/preview.md): what the render-only Argo CD must provide (`--server`)
 - [Code map](docs/reference/code-map.md): what each module does
 
 **Explanation**

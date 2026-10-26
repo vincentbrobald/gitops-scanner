@@ -6,7 +6,9 @@ is checked with it. Keys (see the repository's file for a commented example):
     repository.url               this repository, as Applications name it in repoURL
     repository.trackedRevisions  branches pinned to the commit under test (default [HEAD])
     argocd.version               the Argo CD the preview must match (informational)
-    clusters[]                   name, server: destinations of the stand-in Applications
+    argocd.cm                    argocd-cm settings for argocd-render (e.g. kustomize.buildOptions)
+    clusters[]                   name, server, labels, annotations: the destinations, and what
+                                 cluster generators select (as the clusters' Secrets have them)
     entrypoints[]                name, cluster, path: where the walk starts;
                                  deployed: false marks examples;
                                  recurse: true reads subdirectories too (directory.recurse,
@@ -29,9 +31,11 @@ class ConfigError(Exception):
 
 @dataclasses.dataclass
 class Cluster:
-    """A cluster the preview knows (same name and server as its cluster Secret)."""
+    """A cluster the preview knows (same name, server, labels and annotations as its cluster Secret)."""
     name: str
     server: str
+    labels: dict[str, str] = dataclasses.field(default_factory=dict)
+    annotations: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass
@@ -58,6 +62,7 @@ class Config:
     entrypoints: list[Entrypoint]
     ignore: list[str]                # paths, no surrounding slashes
     external: list[str] = dataclasses.field(default_factory=list)   # repoURL prefixes, lower case
+    argocd_cm: dict[str, str] = dataclasses.field(default_factory=dict)
 
     def server(self, cluster: str) -> str:
         """The API server URL of the named cluster; KeyError if it is unknown."""
@@ -78,7 +83,8 @@ def load(path: Path) -> Config:
     if not isinstance(d, dict) or d.get("kind") != "CheckConfig":
         raise ConfigError(f"{path}: not a CheckConfig")
     try:
-        clusters = {c["name"]: Cluster(c["name"], c["server"]) for c in d.get("clusters", [])}
+        clusters = {c["name"]: Cluster(c["name"], c["server"], dict(c.get("labels") or {}),
+                                       dict(c.get("annotations") or {})) for c in d.get("clusters", [])}
         entries = [Entrypoint(e["name"], e["cluster"], e["path"].strip("/"), e.get("deployed", True),
                               bool(e.get("recurse", False)))
                    for e in d["entrypoints"]]
@@ -90,6 +96,7 @@ def load(path: Path) -> Config:
             entrypoints=entries,
             ignore=[i["path"].strip("/") for i in d.get("ignore", [])],
             external=[e["prefix"].strip().lower() for e in d.get("external", [])],
+            argocd_cm={k: str(v) for k, v in (d.get("argocd", {}).get("cm") or {}).items()},
         )
     except (KeyError, TypeError) as e:
         raise ConfigError(f"{path}: missing or invalid key {e}") from e

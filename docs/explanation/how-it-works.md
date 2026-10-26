@@ -57,14 +57,19 @@ anything. The checks themselves: [Checks](../reference/checks.md).
   from the repository's default branch (`pipelinerun_provenance: default_branch`).
 - Nothing is decrypted anywhere in the check; Secret values never appear in
   the report.
-- Everything submitted to the preview is rewritten so that it can't deploy,
-  and the preview couldn't anyway (no controller, no cluster-wide roles).
-- The preview's `ci` token can only touch Applications in the preview.
+- Everything submitted is rewritten so that it can't deploy. By default it
+  is only rendered, in the check's own pod (argocd-render: no controller, no
+  Kubernetes client but discovery); with `--server`, the preview couldn't
+  deploy it either (no controller, no cluster-wide roles), and its `ci`
+  token can only touch Applications in the preview.
 
 ## Limits
 
-- The revisions must exist on Forgejo (the preview's repo-server fetches
-  them): pull requests from forks are not supported.
+- With `--server`, the revisions must exist on Forgejo (the preview's
+  repo-server fetches them): pull requests from forks are not supported.
+  argocd-render reads them from the clone. In both, the Application names and
+  namespace in the table above are the preview's; argocd-render uses
+  `argocd`.
 - sops re-encrypts every value of a file it edits: an edited Secret shows all
   its keys as changed.
 - A typo in an Application's path also marks the directories it used to reach

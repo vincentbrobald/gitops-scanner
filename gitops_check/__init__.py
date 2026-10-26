@@ -1,1 +1,1 @@
-"""Merge-request checks of a gitops repository, with a render-only Argo CD."""
+"""Merge-request checks of a gitops repository, rendered by Argo CD's own code."""

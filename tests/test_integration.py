@@ -3,6 +3,7 @@ the Argo CD and Forgejo clients over HTTP; kubeconform results mapped back to Ap
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -184,6 +185,21 @@ def test_main_passes_and_cleans_up(repo, argo, tmp_path, monkeypatch):
     assert git(repo, "worktree", "list").count("\n") == 0
     assert {a for a in (p for m, p in handler.calls if m == "DELETE")} >= {
         "/api/v1/applications/t-b-web", "/api/v1/applications/t-a-api"}
+
+
+@pytest.mark.skipif(not shutil.which("argocd-render"), reason="argocd-render not on PATH")
+def test_main_renders_in_process(repo, tmp_path, monkeypatch):
+    """Without --server, argocd-render renders from the local clone: no Argo CD, no token."""
+    monkeypatch.delenv("ARGOCD_TOKEN", raising=False)
+    monkeypatch.delenv("ARGOCD_SERVER", raising=False)
+    base = commit(repo, {".gitops-check.yaml": CONFIG, "apps/web.yaml": app_yaml("web", "web"), "web/cm.yaml": CONFIGMAP})
+    head = commit(repo, {"web/cm.yaml": CONFIGMAP.replace("one", "two"), "apps/broken.yaml": app_yaml("broken", "nowhere")})
+    report = tmp_path / "report.md"
+    code = cli.main(["--repo", str(repo), "--base", base, "--head", head, "--no-schemas", "--report", str(report)])
+    text = report.read_text()
+    assert code == 1, text
+    assert "broken: error generating manifests" in text
+    assert "-  mode: one\n+  mode: two" in text
 
 
 def test_main_logs_the_whole_report(repo, argo, tmp_path, monkeypatch, capsys):

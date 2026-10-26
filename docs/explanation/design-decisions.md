@@ -22,6 +22,26 @@ already exist.
 **Revisit if** Argo CD ships a supported offline render of a whole
 app-of-apps tree.
 
+### Argo CD's code in process (argocd-render)
+
+**Decision.** By default the run renders with `argocd-render`: the
+repo-server's manifest generation and the ApplicationSet generators, as
+Argo CD's API server calls them, linked from the clusters' Argo CD version
+and run in the check's own pod. This repository is fetched from the local
+clone; charts from their repositories.
+**Why.** No preview to run, no token, nothing left behind by a dead run, and
+pull requests render from the clone. The code that renders is still Argo
+CD's, at the clusters' version, with its kustomize and helm.
+**Cost.** What the API server and the preview's settings supplied is now
+assembled here: `argocd-cm` settings (`argocd.cm`), the clusters
+(`clusters[]`), Helm's `.Capabilities` (discovered from the pod's cluster).
+The helper uses Argo CD's internal packages, which change between versions:
+an Argo CD upgrade is a rebuild, sometimes a code change. Only the list,
+clusters, git, matrix and merge generators work (no SCM provider, pull
+request, plugin or duck-type generator).
+**Alternatives.** The preview (`--server`, below), kept until both have
+been compared on real pull requests.
+
 ### A render-only Argo CD with no controller
 
 **Decision.** `argocd-preview` runs only the API server and the repo-server.

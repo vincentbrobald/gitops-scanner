@@ -4,6 +4,20 @@
 
 Run a check by hand, outside the pipeline.
 
+With the image, which renders in process (argocd-render): only the clone,
+holding both revisions, is needed; nothing is pushed or fetched from Forgejo
+(charts still come from their repositories):
+
+```sh
+podman run --rm -v ../gitops:/repo:Z docker.io/vincentbrobald/gitops-scanner:latest \
+    --repo /repo --base origin/main --head my-branch --no-schemas
+```
+
+Outside a pod, Helm sees its default Kubernetes version and no cluster API
+versions, and the cluster-scoped kinds are the built-in list's: a chart
+that tests `.Capabilities`, or a CRD's cluster-scoped kind, can differ from
+the pipeline's run.
+
 Against the preview through a port-forward, with any clone holding both
 revisions (the preview's repo-server fetches them from Forgejo: push the
 branch first):
@@ -15,5 +29,5 @@ python -m gitops_check --repo ../gitops --base origin/main --head origin/my-bran
     --server http://localhost:18080 --report report.md
 ```
 
-Or with the image: `podman run --rm --network host -e ARGOCD_TOKEN -v ../gitops:/repo:Z
+Or the preview with the image: `podman run --rm --network host -e ARGOCD_TOKEN -v ../gitops:/repo:Z
 docker.io/vincentbrobald/gitops-scanner:latest --repo /repo --base ... --head ...`.

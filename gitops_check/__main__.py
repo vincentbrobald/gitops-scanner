@@ -1,12 +1,16 @@
 """gitops-check: render a pull request of a gitops repository before and after,
-with a render-only Argo CD, check what comes out, and report the differences.
+with Argo CD's own code, check what comes out, and report the differences.
 
-  python -m gitops_check --repo . --base origin/main --head HEAD \\
-      --server http://argocd-preview-server.argocd-preview.svc   # token: $ARGOCD_TOKEN
+  python -m gitops_check --repo . --base origin/main --head HEAD
+
+renders in process with argocd-render; with --server (token: $ARGOCD_TOKEN),
+a render-only Argo CD renders instead:
+
+  python -m gitops_check ... --server http://argocd-preview-server.argocd-preview.svc
 
 Exit status: 0 no error, 1 errors (the merge is blocked), 2 the check itself
-could not run (unknown revision, no configuration, the preview unreachable
-or refusing the token): the status fails as well, with the cause in the log.
+could not run (unknown revision, no configuration, argocd-render missing, the
+preview unreachable or refusing the token): the status fails as well, with the cause in the log.
 """
 from __future__ import annotations
 
@@ -21,6 +25,7 @@ from pathlib import Path
 from . import checks, config, diff, report
 from .argocd import ArgoCD, ArgoError
 from .forgejo import Forgejo, token_from_git_credentials
+from .local import LocalArgo
 from .render import RUN_LABEL, Renderer
 
 # A run takes a minute or two: an Application of another run older than this
@@ -73,7 +78,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--base", required=True, help="target branch's commit (before)")
     p.add_argument("--head", required=True, help="pull request's commit (after)")
     p.add_argument("--config", default=".gitops-check.yaml", help="path in the repository (read at --head)")
-    p.add_argument("--server", default=os.environ.get("ARGOCD_SERVER", ""), help="render-only Argo CD URL")
+    p.add_argument("--server", default=os.environ.get("ARGOCD_SERVER", ""),
+                   help="render-only Argo CD URL (default: render in process with argocd-render)")
     p.add_argument("--run-id", default=None, help="prefix of the Applications this run creates")
     p.add_argument("--no-schemas", action="store_true", help="skip kubeconform")
     p.add_argument("--report", type=Path, help="also write the report to this file")
@@ -85,8 +91,8 @@ def main(argv: list[str] | None = None) -> int:
     a = p.parse_args(argv)
 
     token = os.environ.get("ARGOCD_TOKEN", "")
-    if not a.server or not token:
-        p.error("--server (or $ARGOCD_SERVER) and $ARGOCD_TOKEN are required")
+    if a.server and not token:
+        p.error("--server (or $ARGOCD_SERVER) needs $ARGOCD_TOKEN")
     repo = a.repo.resolve()
     try:
         base, head = git(repo, "rev-parse", f"{a.base}^{{commit}}"), git(repo, "rev-parse", f"{a.head}^{{commit}}")
@@ -96,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     # Prefix of every Application this run creates in the preview; the
     # pipeline passes its PipelineRun's name, so parallel runs never collide.
     run = a.run_id or f"gc-{head[:7]}"
-    argo = ArgoCD(a.server, token)
+    argo: ArgoCD | LocalArgo | None = None
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -114,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
             except config.ConfigError as e:
                 print(f"ERROR: {e}", file=sys.stderr)
                 return 2
+            argo = ArgoCD(a.server, token) if a.server else LocalArgo(cfg, repo)
             # 'after' is the merge result only when the target's commit is in head.
             if subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", base, head],
                               check=False).returncode:
@@ -153,12 +160,14 @@ def main(argv: list[str] | None = None) -> int:
                 warnings += w
             diffs = diff.compare(before, after)
         except ArgoError as e:
-            print(f"ERROR: render-only Argo CD: {e}", file=sys.stderr)
+            print(f"ERROR: {'render-only Argo CD' if a.server else 'argocd-render'}: {e}", file=sys.stderr)
             return 2
         finally:
             for r in renderers:
                 for f in r.cleanup():
                     print(f"WARNING: not removed: {f}", file=sys.stderr)
+            if isinstance(argo, LocalArgo):
+                argo.close()
             for t in trees.values():
                 subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(t)],
                                capture_output=True, check=False)

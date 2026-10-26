@@ -8,6 +8,7 @@ from gitops_check import __main__ as cli
 from gitops_check import checks, config, diff, kinds, render, report
 from gitops_check.argocd import ArgoError
 from gitops_check.forgejo import token_from_git_credentials
+from gitops_check.local import LocalArgo
 from gitops_check.render import (
     ORIGIN_LABEL,
     RUN_LABEL,
@@ -24,7 +25,8 @@ CONFIG = f"""
 apiVersion: gitops-check.example/v1alpha1
 kind: CheckConfig
 repository: {{url: {REPO}, trackedRevisions: [main, HEAD]}}
-clusters: [{{name: lab, server: https://kubernetes.default.svc}}]
+clusters: [{{name: lab, server: https://kubernetes.default.svc, labels: {{env: lab}}}}]
+argocd: {{cm: {{kustomize.buildOptions: --enable-helm}}}}
 entrypoints:
   - {{name: lab, cluster: lab, path: clusters/lab/addons/}}
 ignore: [{{path: old, reason: kept}}]
@@ -52,6 +54,8 @@ def test_config(cfg):
     """Entry point paths lose their slashes; clusters and ignored paths are read."""
     assert cfg.entrypoints[0].path == "clusters/lab/addons"
     assert cfg.server("lab") == "https://kubernetes.default.svc"
+    assert cfg.clusters["lab"].labels == {"env": "lab"} and cfg.clusters["lab"].annotations == {}
+    assert cfg.argocd_cm == {"kustomize.buildOptions": "--enable-helm"}
     assert cfg.ignore == ["old"]
 
 
@@ -493,3 +497,35 @@ def test_discover(tmp_path, monkeypatch):
     assert kinds.discover() == {("", "Namespace"), ("example.io", "Widget")}
     del api["/apis"]
     assert kinds.discover() is None
+
+
+FAKE_RENDER = """#!/usr/bin/env python3
+import json, sys
+cfg = json.loads(sys.stdin.readline())
+for line in sys.stdin:
+    req = json.loads(line)
+    if "generate" in req:
+        sys.exit(3)
+    name = req["render"]["metadata"]["name"]
+    answer = {"error": "boom"} if name == "bad" else {"manifests": [{"kind": "ConfigMap", "metadata": cfg}]}
+    print(json.dumps(answer), flush=True)
+"""
+
+
+def test_local_argo(cfg, tmp_path):
+    """The configuration goes first; answers become manifests, errors and a dead helper ArgoErrors."""
+    fake = tmp_path / "argocd-render"
+    fake.write_text(FAKE_RENDER)
+    fake.chmod(0o755)
+    argo = LocalArgo(cfg, tmp_path / "clone", binary=str(fake))
+    argo.create_app({"metadata": {"name": "web"}})
+    sent = argo.manifests("web")[0]["metadata"]
+    assert sent["repos"] == {REPO: str(tmp_path / "clone")} and sent["clusters"][0]["labels"] == {"env": "lab"}
+    assert sent["argocdCM"] == {"kustomize.buildOptions": "--enable-helm"}
+    with pytest.raises(ArgoError, match="boom"):
+        argo.create_app({"metadata": {"name": "bad"}})
+    with pytest.raises(ArgoError, match="exited with status 3"):
+        argo.generate({"metadata": {"name": "set"}})
+    argo.close()
+    with pytest.raises(ArgoError, match="argocd-render"):
+        LocalArgo(cfg, tmp_path, binary=str(tmp_path / "missing"))

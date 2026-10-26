@@ -18,6 +18,18 @@ pip install -r requirements-test.txt && ruff check . && python -m pytest --cov
   directory sources from git at the pinned revision; the Argo CD and Forgejo
   clients over HTTP; kubeconform's results mapped back to Applications. Needs
   `git`; no cluster.
+- `test_main_renders_in_process` runs only with `argocd-render` on `PATH`
+  (and Argo CD's `kustomize`, `helm`, `git-verify-wrapper.sh`); it is skipped otherwise.
+- `argocd-render/main_test.go`: the Go helper, against a temporary git
+  repository. It builds inside Argo CD's source, as the image does:
+
+  ```sh
+  git clone -q --depth 1 --branch v3.5.5 https://github.com/argoproj/argo-cd.git /tmp/argo-cd
+  mkdir -p /tmp/argo-cd/cmd/argocd-render && cp argocd-render/*.go /tmp/argo-cd/cmd/argocd-render/
+  (cd /tmp/argo-cd && go vet ./cmd/argocd-render && go test ./cmd/argocd-render)
+  ```
+
+  The image build runs the same, so a failing Go test fails the build.
 - Coverage must stay at or above `fail_under` in `pyproject.toml` (85%).
 - **Adding a check**: a function in `checks.py` returning `(errors, warnings)`,
   called in `__main__.main`, with a test; document it in
